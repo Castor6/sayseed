@@ -8,6 +8,7 @@ data/
 .env.*
 !.env.example
 .secret
+LOCAL_OPS.md
 *.sqlite
 *.sqlite-*
 *.db
