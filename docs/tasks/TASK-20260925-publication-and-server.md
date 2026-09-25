@@ -15,8 +15,8 @@
 - [x] 检查当前源码与全部 Git 历史，排除真实密码、密钥、数据库和私有运维内容。
 - [x] 添加 MIT 许可证，创建公开仓库，实际运行 CI 并处理失败。
 - [x] 服务器以私有配置接收既有登录密码，文件权限受限，不进入 GitHub 或对话输出。
-- [ ] 独立 HTTPS 入口可以访问，登录与数据持久化通过验证，现有应用正常。
-- [ ] 公共 Task 与私有运维记录分别记录实际结果及未完成项。
+- [x] 独立 HTTPS 入口可以访问，登录与数据持久化通过验证，现有应用正常。
+- [x] 公共 Task 与私有运维记录分别记录实际结果及未完成项。
 
 ## 讨论结论
 
@@ -36,14 +36,24 @@
 
 增加默认 GHCR 镜像发布，使用运行期令牌；保留显式 ACR 配置。首次 GHCR 包可见性需另行设置，服务器应按公开 Release 摘要拉取。GitHub 默认机器人创建的版本 PR 仍可能要求工作流审批，显式 dispatch 的测试结果不能代替该审批；已根据实际行为更正文档。
 
+用户最终选择 ACR，与参考项目一致。本次在 ACR 创建独立私有仓库，并配置 GitHub 的 ACR Variables 与 Secrets；服务器复用既有 Registry 登录，新增仅限目标仓库拉取的独立策略。发布密码由用户输入，不从其他仓库的 Secrets 提取，不保存到服务器。
+
+首个 Web 与扩展版本均为 `0.1.1`，发布提交 `3ceda1737171fd2f247f21ffebb05a54d7b29d18`。服务器使用 Release 中的固定镜像摘要，独立 Compose 项目与数据卷，由 Nginx 提供 HTTPS 和流式代理。采用独立 HTTPS 端口以保持页面、API、静态资源及 PWA 的根路径；具体入口、证书引用和云安全组规则存入私有运维目录。
+
 ## 验证事实与边界
 
 2026-09-25：在干净临时副本放置虚构环境值、数据库和密钥，生产构建后 standalone 全字节扫描零命中，源夹具保留完整；清理后的生产实例通过 86 项 HTTP 检查。工具测试通过 15 项 Node 和 19 项 Python 用例，包含清理路径与符号链接边界。正式构建须运行包内 `build` 命令，直接调用 `next build` 会绕过末尾清理。
 
-服务器原应用与 HTTPS 代理现场检查正常。密码配置已验证，网络与完整部署结果按实际操作补充。
+服务器原应用与 HTTPS 代理现场检查正常。已完成云安全组放行、实际部署、原密码登录和重启持久化验证。
 
 公开提交 `e6465d2` 的[首次 CI](https://github.com/Castor6/sayseed/actions/runs/36109789490)全部通过，包括 Linux 镜像新装、重启持久化与生产 HTTP 联调。随后自动生成[版本 PR #1](https://github.com/Castor6/sayseed/pull/1)；其显式 dispatch CI 与批准后的正式 PR CI 均通过。GHCR 配置分支本地验证通过 15 项 Node、23 项 Python 工具测试和 Actionlint。
 
+[发布配置 PR #2](https://github.com/Castor6/sayseed/pull/2) 经 CI 后合并，版本 PR 自动更新。最终版本的[正式 PR CI](https://github.com/Castor6/sayseed/actions/runs/36110694788)、[主分支 CI](https://github.com/Castor6/sayseed/actions/runs/36111262027)和[自动发布](https://github.com/Castor6/sayseed/actions/runs/36111262587)全部通过。Web [v0.1.1](https://github.com/Castor6/sayseed/releases/tag/v0.1.1)及扩展 [extension-v0.1.1](https://github.com/Castor6/sayseed/releases/tag/extension-v0.1.1)已公开，附件经上传下载校验。
+
+服务器拉取后核对镜像版本、提交、OCI 来源及 amd64 架构，验证与 Release 相符。公网页面及健康检查成功，既有 CA 校验证书通过；匿名读取及错误密码返回 401，原密码登录成功，Cookie 包含 Secure、HttpOnly、SameSite=Strict。创建一条临时笔记后重启容器，原会话、笔记及加密密钥保留；临时笔记已删除。SQLite 完整性检查通过。原应用容器 ID、镜像、启动时间和证书哈希保持不变。
+
+停机保存首次实例完整数据与配置备份，随后恢复服务；备份包含 SQLite、实例密钥、Compose、私有环境配置及 Nginx 站点。本机副本与服务器备份的 SHA256 一致，未执行完整恢复演练。私有使用说明与当日运维记录已更新。
+
 ## 未覆盖范围与后续建议
 
-自动更新器、异地备份和真实模型质量验收按实际完成情况单独记录，不由仓库公开或配置文件存在推定完成。
+本次完成自动版本 PR、镜像及 Release 发布和首次手动部署；尚未安装 Sayseed 服务器定时更新器或配置自动异地备份。本机笔记、模型配置和数据库未迁入新实例。未验收 iPhone 真机、实际扩展连接或真实模型效果；不由 CI 或登录成功推定完成。
