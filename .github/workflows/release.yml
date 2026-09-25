@@ -79,6 +79,9 @@ jobs:
     if: needs.plan.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write
     env:
       RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
       RELEASE_VERSION: ${{ needs.plan.outputs.web_version }}
@@ -98,6 +101,7 @@ jobs:
       - run: pnpm test
       - name: Test the container and publish immutable tags before stable
         env:
+          GH_TOKEN: ${{ github.token }}
           ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
           ACR_IMAGE: ${{ vars.ACR_IMAGE }}
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
