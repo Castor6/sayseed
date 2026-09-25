@@ -81,6 +81,8 @@ jobs:
             --build-arg SOURCE_REPOSITORY="$SOURCE_REPOSITORY" .
       - name: Verify a fresh install and persistent data after restart
         run: node scripts/docker-smoke.mjs --image sayseed:ci
+      - name: Verify automatic updates and rollback in an isolated instance
+        run: sudo python3 scripts/test-updater-docker.py --image sayseed:ci
 
   validate:
     if: always()
