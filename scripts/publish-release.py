@@ -117,13 +117,25 @@ def write_checksums(directory):
     (directory / "SHA256SUMS").write_text("".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in files))
 
 
+def registry_credentials(repo):
+    registry = os.environ.get("ACR_REGISTRY", "")
+    repository = os.environ.get("ACR_IMAGE", "")
+    if registry or repository:
+        registry, repository = required("ACR_REGISTRY"), required("ACR_IMAGE")
+        username, password = required("ACR_USERNAME"), required("ACR_PASSWORD")
+    else:
+        registry, repository = "ghcr.io", f"ghcr.io/{repo.lower()}"
+        username, password = required("GITHUB_ACTOR"), required("GH_TOKEN")
+    if not repository.startswith(registry + "/") or ":" in repository[len(registry):] or "@" in repository:
+        raise PublishError("Image must be a full registry/repository without tag")
+    return registry, repository, username, password
+
+
 def publish_image():
     version, commit, repo = identity("web")
     notes = changelog("web", version)
-    registry, repository = required("ACR_REGISTRY"), required("ACR_IMAGE")
-    if not repository.startswith(registry + "/") or ":" in repository[len(registry):] or "@" in repository:
-        raise PublishError("ACR_IMAGE must be a full registry/repository without tag")
-    run("docker", "login", registry, "--username", required("ACR_USERNAME"), "--password-stdin", input=required("ACR_PASSWORD") + "\n")
+    registry, repository, username, password = registry_credentials(repo)
+    run("docker", "login", registry, "--username", username, "--password-stdin", input=password + "\n")
     refs = [f"{repository}:v{version}", f"{repository}:sha-{commit}"]
     existing = {ref: remote_image(ref) for ref in refs}
     candidate_ref = os.environ.get("SAYSEED_CANDIDATE_IMAGE")

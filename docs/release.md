@@ -42,16 +42,20 @@ node scripts/docker-smoke.mjs --image sayseed:ci
 
 源码中的发布工作流只为 `Castor6/sayseed` 启用；复制到其他仓库时先调整仓库身份条件。
 
-- 启用 Actions，允许 GitHub Actions 创建 PR；工作流默认只读，仅版本 PR job 和 GitHub Release job 获得对应写权限。
+- 启用 Actions，允许 GitHub Actions 创建 PR；工作流默认只读，仅版本 PR job、镜像发布 job 和 GitHub Release job 获得对应写权限。
 - `main` 要求经 PR 合并、严格通过 `validate`、解决讨论；只允许 squash 合并，禁止删除主分支和强推。
-- 建议使用默认 `GITHUB_TOKEN` 创建版本 PR；工作流会显式 dispatch CI，避免机器人创建 PR 后的审批等待阻止必需检查。也支持可选的仓库级 `CHANGESETS_TOKEN`，权限限制为本仓库的内容和 PR 读写。
+- 建议使用默认 `GITHUB_TOKEN` 创建版本 PR；工作流会显式 dispatch CI，先提供版本分支的自动测试结果；这不能替代 PR 工作流审批。若机器人 PR 的工作流要求批准，维护者仍需在 Actions 页面批准，或使用具有相应权限的身份调用 `POST /repos/{owner}/{repo}/actions/runs/{run_id}/approve`，待正式 PR 的 `validate` 通过后再合并。也支持可选的仓库级 `CHANGESETS_TOKEN`，权限限制为本仓库的内容和 PR 读写，以避免默认机器人令牌产生的这一审批提示。
 - 普通功能 PR 不拥有 ACR 凭据。发布 job 只接受同仓已合并的版本 PR，并重新核验其生成内容。
 
 GitHub 对 `GITHUB_TOKEN` 触发后续工作流的规则见[官方说明](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow)。版本 PR 只在当前主分支 CI 成功后自动推进，过期 CI 结果不用于生成新版本。
 
-## ACR 设置与发布顺序
+## 镜像仓库与发布顺序
 
-在阿里云创建 Sayseed 专用镜像仓库，随后配置以下仓库级值。不要把密码写入源码或 Task。
+默认发布到 `ghcr.io/castor6/sayseed`。镜像 job 使用本次运行的 `GITHUB_TOKEN`（`packages: write`）登录 GHCR，无需配置长期 Registry 密码或服务器 SSH 私钥。脚本以小写 `GITHUB_REPOSITORY` 生成镜像路径，OCI 来源标签保留实际 GitHub 仓库身份。
+
+GHCR 新建包默认私有，即使源码仓库公开。首次成功推送后，在 GitHub 的 `sayseed` 包设置中将可见性改为 Public，再验证服务器能够匿名拉取 Release 中的完整摘要。这个设置不会由发布脚本自动完成；完成后服务器无需 Registry 凭据。包通过 OCI `org.opencontainers.image.source` 标签关联源码仓库。参见 [GitHub 容器仓库说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+
+如需使用 ACR，创建 Sayseed 专用镜像仓库并同时配置以下两个 Variable；工作流随后使用对应 ACR Secrets。缺少任一 Variable 或凭据都会失败，不会静默切回 GHCR。不要把密码写入源码或 Task。
 
 | 类型 | 名称 | 内容 |
 | --- | --- | --- |
@@ -61,7 +65,9 @@ GitHub 对 `GITHUB_TOKEN` 触发后续工作流的规则见[官方说明](https:
 | Secret | `ACR_PASSWORD` | 对应 Registry 密码 |
 | Secret，可选 | `CHANGESETS_TOKEN` | 本仓库范围的版本 PR token |
 
-服务器另配目标仓库的只读拉取权限。GitHub 无需保存服务器 SSH 私钥。
+使用私有 ACR 时，服务器另配目标仓库的只读拉取权限。`ACR_REGISTRY` 与 `ACR_IMAGE` 均未配置时始终使用 GHCR；脚本独立调用时同样遵循此规则，GHCR 登录需要 `GITHUB_ACTOR` 与 `GH_TOKEN`。
+
+切换 Registry 不会搬运原仓库中的 `stable`，升级检查以目标仓库已有的上一版为准；迁移已有生产实例前应另行验证从实际部署摘要的升级。
 
 镜像发布先检查版本与 OCI 来源标签，构建或复用同一版本的已有候选，执行新装及从上一版升级验证，再推送不可变版本/提交标签。生成并校验版本元数据与摘要后，最后推进 `stable`。不能将不同内容覆盖到已有版本，也不能把 `stable` 降到更旧版本。整个发布工作流串行执行且不取消正在发布的运行。
 
@@ -74,7 +80,7 @@ GitHub Release 在独立 job 中获得写权限：先固定标签的提交，再
 [compose.production.yaml](../compose.production.yaml)单独使用，不与本地构建 Compose 叠加。把模板复制到服务器的独立部署目录，配置私有 `.env`：
 
 ```dotenv
-SAYSEED_IMAGE=registry.example/namespace/sayseed@sha256:REPLACE_WITH_RELEASE_DIGEST
+SAYSEED_IMAGE=ghcr.io/castor6/sayseed@sha256:REPLACE_WITH_RELEASE_DIGEST
 SAYSEED_PASSWORD=REPLACE_WITH_A_STRONG_PASSWORD
 SAYSEED_PUBLIC_URL=https://sayseed.example.com
 SAYSEED_PORT=3000

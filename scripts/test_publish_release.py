@@ -26,6 +26,26 @@ def image(version="1.2.0", identifier="sha256:candidate"):
     }}}
 
 
+class RegistryTests(unittest.TestCase):
+    def test_default_ghcr_uses_lowercase_source_and_job_token(self):
+        with patch.dict(os.environ, {"GITHUB_ACTOR": "example", "GH_TOKEN": "job-token"}, clear=True):
+            self.assertEqual(publish.registry_credentials("Example/Sayseed"),
+                             ("ghcr.io", "ghcr.io/example/sayseed", "example", "job-token"))
+
+    def test_explicit_acr_uses_only_acr_credentials(self):
+        env = {"ACR_REGISTRY": "registry.example", "ACR_IMAGE": IMAGE,
+               "ACR_USERNAME": "publisher", "ACR_PASSWORD": "registry-token", "GH_TOKEN": "job-token"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(publish.registry_credentials(REPO),
+                             ("registry.example", IMAGE, "publisher", "registry-token"))
+
+    def test_partial_acr_configuration_does_not_fall_back(self):
+        for key, value in [("ACR_REGISTRY", "registry.example"), ("ACR_IMAGE", IMAGE)]:
+            with self.subTest(key=key), patch.dict(os.environ, {key: value, "GITHUB_ACTOR": "example", "GH_TOKEN": "job-token"}, clear=True):
+                with self.assertRaises(publish.PublishError):
+                    publish.registry_credentials(REPO)
+
+
 class ImageGuardTests(unittest.TestCase):
     def test_immutable_tag_rejects_different_image(self):
         with self.assertRaises(publish.PublishError):
@@ -47,10 +67,12 @@ class ImageGuardTests(unittest.TestCase):
                     with self.assertRaises(publish.PublishError):
                         publish.remote_image("x")
 
-    def simulate(self, failure=None, existing=False, previous=False):
+    def simulate(self, failure=None, existing=False, previous=False, ghcr=False):
         calls = []
         pushed = set()
         candidate = image()
+        repository = "ghcr.io/" + REPO if ghcr else IMAGE
+        candidate["RepoDigests"] = [repository + "@sha256:" + "b" * 64]
         def run(*args, **kwargs):
             calls.append(args)
             if args[:2] == ("node", "scripts/docker-smoke.mjs") and failure == "smoke":
@@ -69,6 +91,8 @@ class ImageGuardTests(unittest.TestCase):
                 return image("1.1.0", "sha256:previous")
             return None
         env = {"ACR_REGISTRY": "registry.example", "ACR_IMAGE": IMAGE, "ACR_USERNAME": "fake", "ACR_PASSWORD": "fake"}
+        if ghcr:
+            env = {"GITHUB_ACTOR": "example", "GH_TOKEN": "job-token"}
         if not existing:
             env["SAYSEED_CANDIDATE_IMAGE"] = "candidate"
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, env, clear=True), patch.object(publish, "identity", return_value=("1.2.0", COMMIT, REPO)), patch.object(publish, "changelog", return_value="# Release\n"), patch.object(publish, "local_image", return_value=candidate), patch.object(publish, "remote_image", side_effect=remote), patch.object(publish, "run", side_effect=run):
@@ -81,6 +105,9 @@ class ImageGuardTests(unittest.TestCase):
                 else:
                     publish.publish_image()
                     publish.verify_directory(Path("build/release/web"), "web", "1.2.0", COMMIT)
+                    metadata = json.loads(Path("build/release/web/release.json").read_text())
+                    self.assertEqual(metadata["image"], candidate["RepoDigests"][0])
+                    self.assertEqual(Path("build/release/web/image-digest.txt").read_text().strip(), metadata["image"])
             finally:
                 os.chdir(old)
         return calls
@@ -114,6 +141,13 @@ class ImageGuardTests(unittest.TestCase):
         calls = self.simulate()
         pushes = [c[-1] for c in calls if c[:2] == ("docker", "push")]
         self.assertEqual(pushes, [IMAGE + ":v1.2.0", IMAGE + ":sha-" + COMMIT, IMAGE + ":stable"])
+
+    def test_ghcr_publishes_same_identity_and_promotes_stable_last(self):
+        calls = self.simulate(ghcr=True)
+        self.assertIn(("docker", "login", "ghcr.io", "--username", "example", "--password-stdin"), calls)
+        self.assertEqual([c[-1] for c in calls if c[:2] == ("docker", "push")], [
+            f"ghcr.io/{REPO}:v1.2.0", f"ghcr.io/{REPO}:sha-{COMMIT}", f"ghcr.io/{REPO}:stable",
+        ])
 
     def test_retry_reuses_existing_image_without_rebuild(self):
         calls = self.simulate(existing=True)
