@@ -14,6 +14,14 @@ pnpm build
 
 完成构建后可运行 `pnpm test:ci`，自动创建临时生产实例、启动协议模拟器并运行 HTTP 联调，结束后清理。`pnpm test` 也包含版本策略、扩展打包和发布工具测试；单独检查这些脚本可运行 `pnpm test:tooling`。GitHub CI、Linux 容器验证及版本发布见 [发布说明](release.md)。
 
+服务器更新器的状态机、备份恢复和保留规则测试同样包含在 `pnpm test:tooling` 中。Linux Docker 环境可对已构建镜像运行隔离演练：
+
+```bash
+sudo python3 scripts/test-updater-docker.py --image sayseed:ci
+```
+
+该演练创建独立 Compose 项目、具名卷和本地候选镜像，使用虚构密码检查升级、回滚、重复执行和中断恢复，结束后精确清理测试资源。它不会发布测试版本，也不接受生产数据卷作为参数；需要 root 权限读写临时 Docker 卷以验证真实备份路径。CI 的 `container` job 会运行同一脚本。公网维护入口与定时器安装需另行实测，流程见[服务器自动更新](deployment.md)。
+
 ## 本地协议与业务联调
 
 以下流程只用于独立的本地测试实例。不要把 `SAYSEED_SMOKE_URL` 指向自己的日常数据库；测试会创建连接、模型、收藏和评分记录。

@@ -9,6 +9,7 @@
 | 接口、数据与产品行为约定 | [实现契约](implementation-contract.md) |
 | 本地检查、隔离联调和人工验收 | [验证说明](testing.md) |
 | CI、版本 PR、镜像和扩展发布 | [CI 与版本发布](release.md) |
+| 服务器定时更新、完整备份和失败恢复 | [服务器自动更新](deployment.md) |
 | 记录一次需求、修复或方案讨论 | [Task 模板](tasks/TEMPLATE.md) |
 | 查找历史决定和验证事实 | [任务检索](tasks/INDEX.md) |
 | 长期协作与代码规则 | [AGENTS.md](../AGENTS.md) |

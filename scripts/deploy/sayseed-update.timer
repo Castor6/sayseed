@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a new Sayseed release every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+RandomizedDelaySec=30s
+Unit=sayseed-update.service
+
+[Install]
+WantedBy=timers.target
