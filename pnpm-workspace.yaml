@@ -1,0 +1,18 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  # Version 13 ships N-API prebuilds; no install-time compilation is needed.
+  better-sqlite3: false
+  esbuild: true
+  sharp: true
+
+minimumReleaseAgeExclude:
+  - '@ai-sdk/anthropic@4.0.62'
+  - '@ai-sdk/gateway@4.0.91'
+  - '@ai-sdk/google@4.0.79'
+  - '@ai-sdk/openai-compatible@3.0.55'
+  - '@ai-sdk/openai@4.0.74'
+  - '@ai-sdk/provider-utils@5.0.47'
+  - ai@7.0.113

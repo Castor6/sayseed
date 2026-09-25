@@ -1,0 +1,36 @@
+{
+  "name": "@sayseed/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "tsx --test src/server/*.test.ts"
+  },
+  "dependencies": {
+    "@sayseed/shared": "workspace:*",
+    "@ai-sdk/anthropic": "4.0.62",
+    "@ai-sdk/google": "4.0.79",
+    "@ai-sdk/openai": "4.0.74",
+    "@ai-sdk/openai-compatible": "3.0.55",
+    "ai": "7.0.113",
+    "better-sqlite3": "13.0.3",
+    "drizzle-orm": "0.45.3",
+    "next": "16.3.6",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "ts-fsrs": "5.4.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "7.0.2"
+  }
+}

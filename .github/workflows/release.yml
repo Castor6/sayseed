@@ -1,0 +1,184 @@
+name: Publish Release
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      release_pr:
+        description: Merged Version Packages PR number to retry
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: >-
+      github.repository == 'Castor6/sayseed' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event.pull_request.merged == true &&
+        github.event.pull_request.head.ref == 'changeset-release/main'))
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - id: source
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RELEASE_PR: ${{ inputs.release_pr || github.event.pull_request.number }}
+        with:
+          script: |
+            if (!/^[1-9]\d*$/.test(process.env.RELEASE_PR)) throw new Error('Invalid PR number');
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: Number(process.env.RELEASE_PR)});
+            if (!pr.merged || pr.base.ref !== 'main' || pr.head.ref !== 'changeset-release/main' ||
+                pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
+                !['github-actions[bot]', context.repo.owner].includes(pr.user.login) ||
+                !/^[a-f0-9]{40}$/.test(pr.merge_commit_sha)) {
+              throw new Error('Expected a merged version PR from this repository');
+            }
+            core.setOutput('commit', pr.merge_commit_sha);
+
+  plan:
+    needs: source
+    runs-on: ubuntu-latest
+    outputs:
+      web: ${{ steps.plan.outputs.web_changed }}
+      extension: ${{ steps.plan.outputs.extension_changed }}
+      web_version: ${{ steps.plan.outputs.web_version }}
+      extension_version: ${{ steps.plan.outputs.extension_version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Reproduce the exact version changes before publishing
+        id: plan
+        env:
+          VERSION_PR: "true"
+        run: |
+          export RELEASE_BASE=$(git rev-parse HEAD^)
+          node scripts/release-check.mjs --plan
+
+  web:
+    needs: [source, plan]
+    if: needs.plan.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
+      RELEASE_VERSION: ${{ needs.plan.outputs.web_version }}
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Test the container and publish immutable tags before stable
+        env:
+          ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
+          ACR_IMAGE: ${{ vars.ACR_IMAGE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: python3 scripts/publish-release.py image
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: web-release-${{ needs.source.outputs.commit }}
+          path: build/release/web/
+          if-no-files-found: error
+          retention-days: 30
+
+  web-release:
+    needs: [source, plan, web]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: web-release-${{ needs.source.outputs.commit }}
+          path: build/release/web/
+      - name: Publish the verified web release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.web_version }}
+        run: python3 scripts/publish-release.py github --component web --directory build/release/web
+
+  extension:
+    needs: [source, plan]
+    if: needs.plan.outputs.extension == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:tooling
+      - run: pnpm --filter @sayseed/extension typecheck
+      - run: pnpm --filter @sayseed/extension test
+      - run: pnpm --filter @sayseed/extension build
+      - name: Package the versioned extension
+        env:
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
+        run: pnpm package:extension
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: extension-release-${{ needs.source.outputs.commit }}
+          path: build/release/extension/
+          if-no-files-found: error
+          retention-days: 30
+
+  extension-release:
+    needs: [source, plan, extension]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: extension-release-${{ needs.source.outputs.commit }}
+          path: build/release/extension/
+      - name: Publish the verified extension release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
+          RELEASE_VERSION: ${{ needs.plan.outputs.extension_version }}
+        run: python3 scripts/publish-release.py github --component extension --directory build/release/extension

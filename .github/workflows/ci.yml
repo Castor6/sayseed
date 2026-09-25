@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Validate GitHub workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -shellcheck=""
+      - name: Check release metadata and version PR contents
+        env:
+          RELEASE_BASE: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/changeset-release/main' && 'origin/main') || '' }}
+          VERSION_PR: ${{ (github.event.pull_request.head.ref == 'changeset-release/main' && github.event.pull_request.head.repo.full_name == github.repository) || github.ref == 'refs/heads/changeset-release/main' }}
+        run: |
+          if [ -n "$RELEASE_BASE" ]; then
+            export RELEASE_BASE=$(git rev-parse "$RELEASE_BASE")
+          fi
+          pnpm check:release
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Run isolated production HTTP checks
+        run: pnpm test:ci
+      - name: Package and validate the Chromium extension
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: pnpm package:extension
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: extension-candidate-${{ github.sha }}
+          path: build/release/extension/
+          if-no-files-found: error
+          retention-days: 7
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+      - name: Build the Linux runtime image
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+          SOURCE_REPOSITORY: https://github.com/${{ github.repository }}
+        run: |
+          RELEASE_VERSION=$(node -p "require('./apps/web/package.json').version")
+          docker build --tag sayseed:ci \
+            --build-arg RELEASE_VERSION="$RELEASE_VERSION" \
+            --build-arg RELEASE_COMMIT="$RELEASE_COMMIT" \
+            --build-arg SOURCE_REPOSITORY="$SOURCE_REPOSITORY" .
+      - name: Verify a fresh install and persistent data after restart
+        run: node scripts/docker-smoke.mjs --image sayseed:ci
+
+  validate:
+    if: always()
+    needs: [checks, container]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every check to succeed
+        env:
+          CHECKS: ${{ needs.checks.result }}
+          CONTAINER: ${{ needs.container.result }}
+        run: test "$CHECKS" = success && test "$CONTAINER" = success
