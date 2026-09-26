@@ -112,6 +112,7 @@ function UsageItem({ item }: { item: UsageRecord }) {
       {error && <div className="notice error" role="alert">{error}<button type="button" className="text-button" onClick={() => void loadDetail()}>重试</button></div>}
       {detail && !loading && !error && (detail.context ? <>
         <div className="usage-context-header"><strong>调用时的内容</strong><button type="button" className="text-button" onClick={() => void copyText(JSON.stringify(detail.context, null, 2))}>复制完整上下文</button></div>
+        <p className="usage-context-state">{item.purpose === 'test' ? '提示词来源：固定连接测试指令' : detail.context.prompt ? `提示词来源：${detail.context.prompt.mode === 'default' ? '内置默认' : '自定义'} · 配置版本 ${detail.context.prompt.revision} · 默认正文版本 ${detail.context.prompt.defaultVersion} · 应用规则版本 ${detail.context.prompt.protocolVersion}` : '提示词版本未记录'}</p>
         <UsageTextBlock title="系统提示词" value={detail.context.system} empty="未设置系统提示词" onCopy={copyText}/>
         <div className="usage-context-section"><h4>完整输入</h4>{detail.context.messages.length ? detail.context.messages.map((message, messageIndex) => <div className="usage-message" key={messageIndex}>
           <div className="usage-message-role">{roleLabels[message.role]} · 第 {messageIndex + 1} 条</div>

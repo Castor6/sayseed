@@ -5,6 +5,10 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { api, errorMessage } from './api';
 
+export function allowAppNavigation() {
+  return window.dispatchEvent(new Event('sayseed:before-navigate', { cancelable: true }));
+}
+
 type Session = { authenticated: boolean; configured: boolean };
 
 export function ProtectedApp({ children }: { children: React.ReactNode }) {
@@ -24,6 +28,7 @@ export function ProtectedApp({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   async function logout() {
+    if (!allowAppNavigation()) return;
     try {
       await api('/auth/logout', { method: 'POST' });
       router.replace('/login');
@@ -42,11 +47,11 @@ export function ProtectedApp({ children }: { children: React.ReactNode }) {
 
   return <div className="app-shell">
     <aside className="sidebar">
-      <Link href="/review" className="brand"><span className="brand-mark">s<span>·</span></span><span>Sayseed<small>让表达生根</small></span></Link>
-      <nav className="side-nav" aria-label="主导航">{links.map(link => <Link key={link.href} href={link.href} className={pathname === link.href ? 'nav-link active' : 'nav-link'}><span aria-hidden="true">{link.icon}</span>{link.label}</Link>)}</nav>
+      <Link href="/review" className="brand" onNavigate={event => { if (!allowAppNavigation()) event.preventDefault(); }}><span className="brand-mark">s<span>·</span></span><span>Sayseed<small>让表达生根</small></span></Link>
+      <nav className="side-nav" aria-label="主导航">{links.map(link => <Link key={link.href} href={link.href} onNavigate={event => { if (!allowAppNavigation()) event.preventDefault(); }} className={pathname === link.href || pathname.startsWith(`${link.href}/`) ? 'nav-link active' : 'nav-link'}><span aria-hidden="true">{link.icon}</span>{link.label}</Link>)}</nav>
       <div className="sidebar-bottom"><span className="sidebar-caption">在真实语境中积累表达</span><button onClick={logout} className="text-button">退出登录</button></div>
     </aside>
     <main className="main-content">{children}{pathname === '/settings' && <div className="mobile-signout"><button onClick={logout} className="text-button">退出登录</button></div>}</main>
-    <nav className="bottom-nav" aria-label="主导航">{links.map(link => <Link key={link.href} href={link.href} className={pathname === link.href ? 'bottom-link active' : 'bottom-link'}><span aria-hidden="true">{link.icon}</span><span>{link.label}</span></Link>)}</nav>
+    <nav className="bottom-nav" aria-label="主导航">{links.map(link => <Link key={link.href} href={link.href} onNavigate={event => { if (!allowAppNavigation()) event.preventDefault(); }} className={pathname === link.href || pathname.startsWith(`${link.href}/`) ? 'bottom-link active' : 'bottom-link'}><span aria-hidden="true">{link.icon}</span><span>{link.label}</span></Link>)}</nav>
   </div>;
 }
