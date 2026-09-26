@@ -99,3 +99,7 @@ docker compose -f compose.production.yaml up -d
 需要自动跟随已验证版本时，安装[服务器自动更新器](deployment.md)。它在服务器定时拉取 `stable`，校验后停机备份，并固定摘要启动；失败时恢复配套数据和旧镜像。扩展 ZIP 的发布不触发服务器更新。
 
 此文档描述配置接口，不表示生产已部署。具体服务器的安装与验收以部署任务和私有运维记录为准。源码中的健康检查仍是基础 HTTP 存活检查，更新器会另行核对容器身份、数据库和密钥；真实 HTTPS/iPhone/扩展联调仍需实际验收。
+
+## 镜像渠道选择
+
+默认发布 GHCR；`IMAGE_CHANNEL=acr` 时发布 ACR，现有 ACR 凭据本身不再隐式选择渠道。平时只发布一个仓库，已发布版本需要转仓时使用 `Transfer Release Image`。详细切换顺序和服务器配置见 [部署说明](deployment.md#发布渠道与按需转仓)。
