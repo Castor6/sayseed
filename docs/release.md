@@ -51,11 +51,11 @@ GitHub 对 `GITHUB_TOKEN` 触发后续工作流的规则见[官方说明](https:
 
 ## 镜像仓库与发布顺序
 
-默认发布到 `ghcr.io/castor6/sayseed`。镜像 job 使用本次运行的 `GITHUB_TOKEN`（`packages: write`）登录 GHCR，无需配置长期 Registry 密码或服务器 SSH 私钥。脚本以小写 `GITHUB_REPOSITORY` 生成镜像路径，OCI 来源标签保留实际 GitHub 仓库身份。
+每次服务端版本发布同时上传 ACR 和 `ghcr.io/castor6/sayseed`。构建、空卷新装和上一正式版升级测试仅运行一次；候选镜像导出为 OCI archive，两个独立 matrix job 使用 `skopeo --preserve-digests` 上传同一摘要。`fail-fast: false` 保证某一路失败不取消另一条；任何一路失败都会使整次 Actions 标红，Release 汇总显示各渠道结果，成功通道独立更新 `stable`。
 
-GHCR 新建包默认私有，即使源码仓库公开。首次成功推送后，在 GitHub 的 `sayseed` 包设置中将可见性改为 Public，再验证服务器能够匿名拉取 Release 中的完整摘要。这个设置不会由发布脚本自动完成；完成后服务器无需 Registry 凭据。包通过 OCI `org.opencontainers.image.source` 标签关联源码仓库。参见 [GitHub 容器仓库说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
+GHCR 使用本次运行的 `GITHUB_TOKEN`（`packages: write`），不需要长期 Registry 密码或服务器 SSH 私钥。新包默认私有；首次推送后需在包设置中设为 Public 并验证匿名拉取，脚本不会自动改变可见性。OCI 来源标签保留实际 GitHub 仓库身份。
 
-如需使用 ACR，创建 Sayseed 专用镜像仓库并同时配置以下两个 Variable；工作流随后使用对应 ACR Secrets。缺少任一 Variable 或凭据都会失败，不会静默切回 GHCR。不要把密码写入源码或 Task。
+ACR 继续使用以下配置；发布目标固定为两仓，缺失配置会明确失败，不静默改为单仓：
 
 | 类型 | 名称 | 内容 |
 | --- | --- | --- |
@@ -65,11 +65,13 @@ GHCR 新建包默认私有，即使源码仓库公开。首次成功推送后，
 | Secret | `ACR_PASSWORD` | 对应 Registry 密码 |
 | Secret，可选 | `CHANGESETS_TOKEN` | 本仓库范围的版本 PR token |
 
-使用私有 ACR 时，服务器另配目标仓库的只读拉取权限。`ACR_REGISTRY` 与 `ACR_IMAGE` 均未配置时始终使用 GHCR；脚本独立调用时同样遵循此规则，GHCR 登录需要 `GITHUB_ACTOR` 与 `GH_TOKEN`。
+上一版由版本 PR 父提交的 Web 包版本确定，再读取对应正式 GitHub Release 的元数据与校验和，并校验标签提交。优先从 GHCR、其次 ACR 获取同一固定摘要，核对版本、来源、提交和 linux/amd64 平台。网络、鉴权或镜像缺失均不能绕过升级测试。仅已确认没有任何正式 Web Release 的初始 `0.1.0 → 0.1.1` 开发基线可执行首版发布。
 
-切换 Registry 不会搬运原仓库中的 `stable`，升级检查以目标仓库已有的上一版为准；迁移已有生产实例前应另行验证从实际部署摘要的升级。
+每个通道先检查不可变版本/提交标签，再推进 `stable`；不同内容不得覆盖相同版本，`stable` 不得降级。单次网络命令超时五分钟，复制最多三次、间隔五秒；每路发布步骤总上限十五分钟。整个发布与转存流程共用并发锁。
 
-镜像发布先检查版本与 OCI 来源标签，构建或复用同一版本的已有候选，执行新装及从上一版升级验证，再推送不可变版本/提交标签。生成并校验版本元数据与摘要后，最后推进 `stable`。不能将不同内容覆盖到已有版本，也不能把 `stable` 降到更旧版本。整个发布工作流串行执行且不取消正在发布的运行。
+Release 至少有一个已验证成功的渠道才会公开；元数据保留兼容的单一 `image` 完整摘要字段。已有正式 Release 不因备用仓库修复而改写附件。另一通道失败不影响成功仓库供服务器拉取，但本次 Actions 仍失败以提醒补齐。
+
+历史版本或失败渠道使用 `Transfer Released Image`：填写正式版本号（不带 v）和目标仓库。它按可信 Release 摘要复制镜像，不重新构建、不覆盖不一致标签，默认不改变 `stable`；显式勾选 `advance_stable` 时，只允许当前最新正式版本推进，并再次校验目标 stable 不降级。若原仓库和另一份副本都不可访问则失败，不能凭标签重建同一版本。常规发布失败可重跑失败的 matrix job，继续使用保留三十天的候选 artifact。候选上传后先写入精确提交的永久 commit status 收据，再允许任何仓库发布；整轮重试优先按收据恢复并校验原产物。已记录产物过期或无法取回时拒绝重建，避免某仓不可访问时制造同版本不同摘要；只有没有既有收据或正式版本的首次构建才允许某一路仓库不可访问。
 
 GitHub Release 在独立 job 中获得写权限：先固定标签的提交，再创建草稿、上传附件、逐个下载校验，最后公开。已有附件内容不同会失败，不静默覆盖。扩展 ZIP 的文件排序和时间戳固定，并检查 manifest 版本及不应交付的内容。
 

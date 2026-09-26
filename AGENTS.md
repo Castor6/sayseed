@@ -56,3 +56,5 @@ SAYSEED_SMOKE_URL=http://127.0.0.1:3100 SAYSEED_SMOKE_PASSWORD=fixture-local-pas
 - 真实部署地址、账号、密钥、运行数据、原始日志和备份留在被 Git 忽略的本地目录或私有运维目录，不写进公开任务文档。
 - 发布、部署和服务器当前状态以实际配置及现场证据为准，不能由规划文档、PR 合并或历史记录推定已完成。
 - 交付行为变化添加新的 `.changeset/*.md`，选择实际受影响的包并写中文说明；只由版本 PR 更新包版本和 CHANGELOG。普通 PR 合并不发布；仅扩展版本变化不触发服务端镜像发布。
+
+- 服务端发布采用同一 OCI 候选双仓独立上传；任一路失败保持 Actions 失败，成功一路允许独立推进 stable。上一正式版必须按可信 Release 摘要验证，禁止以仓库缺失绕过升级测试。历史补传使用 Transfer Released Image，不重建旧版本、不覆盖不一致标签或降级 stable。

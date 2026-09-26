@@ -1,0 +1,52 @@
+name: Transfer Released Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing formal web version without v (no rebuild; stable is unchanged)
+        required: true
+        type: string
+      channel:
+        description: Destination registry
+        required: true
+        type: choice
+        options: [ghcr, acr]
+      advance_stable:
+        description: Promote only the newest formal release to stable
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  transfer:
+    if: github.repository == 'Castor6/sayseed' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Copy the verified release without changing stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
+          ACR_IMAGE: ${{ vars.ACR_IMAGE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel }}
+          ADVANCE_STABLE: ${{ inputs.advance_stable }}
+        run: |
+          args=()
+          if [[ "$ADVANCE_STABLE" == true ]]; then args+=(--advance-stable); fi
+          python3 scripts/registry-publication.py transfer --version "$VERSION" --channel "$CHANNEL" "${args[@]}"

@@ -3,6 +3,14 @@
   "state_dir": "/var/lib/sayseed-update",
   "backup_dir": "/opt/backups/sayseed-update",
   "image_repository": "registry.example.com/namespace/sayseed",
+  "image_repositories": {
+    "acr": "registry.example.com/namespace/sayseed",
+    "ghcr": "ghcr.io/castor6/sayseed"
+  },
+  "retained_image_repositories": [
+    "registry.example.com/namespace/sayseed",
+    "ghcr.io/castor6/sayseed"
+  ],
   "volume_name": "sayseed-data",
   "health_url": "http://127.0.0.1:3000/api/health",
   "public_health_url": "https://sayseed.example.com/api/health",
