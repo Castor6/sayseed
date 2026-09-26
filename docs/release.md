@@ -55,7 +55,7 @@ GitHub 对 `GITHUB_TOKEN` 触发后续工作流的规则见[官方说明](https:
 
 GHCR 新建包默认私有，即使源码仓库公开。首次成功推送后，在 GitHub 的 `sayseed` 包设置中将可见性改为 Public，再验证服务器能够匿名拉取 Release 中的完整摘要。这个设置不会由发布脚本自动完成；完成后服务器无需 Registry 凭据。包通过 OCI `org.opencontainers.image.source` 标签关联源码仓库。参见 [GitHub 容器仓库说明](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)。
 
-如需使用 ACR，创建 Sayseed 专用镜像仓库并同时配置以下两个 Variable；工作流随后使用对应 ACR Secrets。缺少任一 Variable 或凭据都会失败，不会静默切回 GHCR。不要把密码写入源码或 Task。
+如需使用 ACR，将 `IMAGE_CHANNEL` 设为 `acr`，创建 Sayseed 专用镜像仓库并同时配置以下两个 Variable；工作流随后使用对应 ACR Secrets。缺少任一 Variable 或凭据都会失败，不会静默切回 GHCR。不要把密码写入源码或 Task。
 
 | 类型 | 名称 | 内容 |
 | --- | --- | --- |
@@ -65,7 +65,7 @@ GHCR 新建包默认私有，即使源码仓库公开。首次成功推送后，
 | Secret | `ACR_PASSWORD` | 对应 Registry 密码 |
 | Secret，可选 | `CHANGESETS_TOKEN` | 本仓库范围的版本 PR token |
 
-使用私有 ACR 时，服务器另配目标仓库的只读拉取权限。`ACR_REGISTRY` 与 `ACR_IMAGE` 均未配置时始终使用 GHCR；脚本独立调用时同样遵循此规则，GHCR 登录需要 `GITHUB_ACTOR` 与 `GH_TOKEN`。
+使用私有 ACR 时，服务器另配目标仓库的只读拉取权限。`IMAGE_CHANNEL` 未设置或设为 `ghcr` 时使用 GHCR，即使保留 ACR 配置也不访问它；脚本独立调用时同样遵循此规则，GHCR 登录需要 `GITHUB_ACTOR` 与 `GH_TOKEN`。
 
 切换 Registry 不会搬运原仓库中的 `stable`，升级检查以目标仓库已有的上一版为准；迁移已有生产实例前应另行验证从实际部署摘要的升级。
 
@@ -99,3 +99,7 @@ docker compose -f compose.production.yaml up -d
 需要自动跟随已验证版本时，安装[服务器自动更新器](deployment.md)。它在服务器定时拉取 `stable`，校验后停机备份，并固定摘要启动；失败时恢复配套数据和旧镜像。扩展 ZIP 的发布不触发服务器更新。
 
 此文档描述配置接口，不表示生产已部署。具体服务器的安装与验收以部署任务和私有运维记录为准。源码中的健康检查仍是基础 HTTP 存活检查，更新器会另行核对容器身份、数据库和密钥；真实 HTTPS/iPhone/扩展联调仍需实际验收。
+
+## 镜像渠道选择
+
+默认发布 GHCR；`IMAGE_CHANNEL=acr` 时发布 ACR，现有 ACR 凭据本身不再隐式选择渠道。平时只发布一个仓库，已发布版本需要转仓时使用 `Transfer Release Image`。详细切换顺序和服务器配置见 [部署说明](deployment.md#发布渠道与按需转仓)。

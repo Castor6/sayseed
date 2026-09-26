@@ -9,6 +9,8 @@ import re
 import subprocess
 import sys
 
+from registry_channel import credentials
+
 
 class PublishError(RuntimeError):
     pass
@@ -118,17 +120,10 @@ def write_checksums(directory):
 
 
 def registry_credentials(repo):
-    registry = os.environ.get("ACR_REGISTRY", "")
-    repository = os.environ.get("ACR_IMAGE", "")
-    if registry or repository:
-        registry, repository = required("ACR_REGISTRY"), required("ACR_IMAGE")
-        username, password = required("ACR_USERNAME"), required("ACR_PASSWORD")
-    else:
-        registry, repository = "ghcr.io", f"ghcr.io/{repo.lower()}"
-        username, password = required("GITHUB_ACTOR"), required("GH_TOKEN")
-    if not repository.startswith(registry + "/") or ":" in repository[len(registry):] or "@" in repository:
-        raise PublishError("Image must be a full registry/repository without tag")
-    return registry, repository, username, password
+    try:
+        return credentials(repo)
+    except ValueError as error:
+        raise PublishError(str(error)) from error
 
 
 def publish_image():

@@ -2,7 +2,7 @@
   "app_dir": "/opt/sayseed",
   "state_dir": "/var/lib/sayseed-update",
   "backup_dir": "/opt/backups/sayseed-update",
-  "image_repository": "registry.example.com/namespace/sayseed",
+  "image_repository": "ghcr.io/castor6/sayseed",
   "volume_name": "sayseed-data",
   "health_url": "http://127.0.0.1:3000/api/health",
   "public_health_url": "https://sayseed.example.com/api/health",
@@ -10,5 +10,8 @@
   "backup_keep_count": 3,
   "backup_keep_days": 30,
   "health_attempts": 45,
-  "health_interval": 2
+  "health_interval": 2,
+  "retained_image_repositories": [
+    "registry.example.com/namespace/sayseed"
+  ]
 }
