@@ -57,3 +57,17 @@
 ## 未覆盖范围与后续建议
 
 本次完成自动版本 PR、镜像及 Release 发布和首次手动部署；尚未安装 Sayseed 服务器定时更新器或配置自动异地备份。本机笔记、模型配置和数据库未迁入新实例。未验收 iPhone 真机、实际扩展连接或真实模型效果；不由 CI 或登录成功推定完成。
+
+## 2026-09-26：版本 PR 自动运行检查
+
+维护归属：版本 PR 授权配置会话，文档分支 `docs/version-pr-authorization`。用户要求版本 PR 像参考项目一样自动运行 CI，省去每次批准工作流的操作。
+
+比较确认，参考项目已配置专用 `CHANGESETS_TOKEN`，Sayseed 原先使用默认 `GITHUB_TOKEN`，导致机器人创建或更新 PR 时的正式 CI 等待批准。既有版本工作流已支持优先使用 `CHANGESETS_TOKEN`，本次补齐仓库配置，无需修改工作流代码或放宽 `validate` 合并门禁。
+
+创建仅授权本仓库的细粒度个人访问令牌，权限为 Contents 与 Pull requests 读写，以及必需的 Metadata 只读，保存为仓库 Actions secret `CHANGESETS_TOKEN`。初始设置为 90 天；用户明确要求与参考项目一致、不设到期日后，已重新生成无到期日的令牌，并更新同名 secret，仓库范围和权限保持不变。GitHub 页面确认无到期日及 secret 更新成功。凭据只在 GitHub 配置流程中传递，未写入源码、任务文档或命令输出。
+
+2026-09-26：GitHub 页面确认 secret 保存成功，API 元数据确认创建时间为当天 08:14:33 UTC。添加 secret 不会直接批准已经等待中的旧 CI；后续正式 PR 检查需由使用新令牌的版本 PR 创建或更新事件触发。
+
+为验证配置，手动运行一次[版本整理工作流](https://github.com/Castor6/sayseed/actions/runs/36229213732)，结果成功；默认令牌路径的额外 dispatch 步骤被跳过。工作流将[版本 PR #9](https://github.com/Castor6/sayseed/pull/9)更新为 `77e1bd3d6c7846c09cde8e602b4c530b363c4100`，随后[正式 PR CI](https://github.com/Castor6/sayseed/actions/runs/36229244962)自动运行，未要求批准，`checks`、`container` 和 `validate` 均通过。此证据确认令牌配置及自动触发生效；不由检查通过推定 PR 已合并或新版本已发布。此次仅修改仓库授权配置和任务记录，未修改产品代码。
+
+令牌改为无到期日并更新 secret 后，[再次运行版本整理工作流](https://github.com/Castor6/sayseed/actions/runs/36229591113)成功，确认替换后的凭据可用。
