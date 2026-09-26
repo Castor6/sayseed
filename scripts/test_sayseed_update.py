@@ -309,10 +309,13 @@ class IdentityAndRetentionTests(unittest.TestCase):
                               "previous_image_id": image, "archive_sha256": digest, "status": "success"})
             latest_archive = archive
         module.write_json(self.u.state / "deployed.json", {"image": "current", "backup": str(latest_archive)})
+        ghcr = "ghcr.io/castor6/sayseed"
+        self.u.retained_repositories.add(ghcr)
         inventory = [{"Id": image, "RepoDigests": [self.u.repo + "@sha256:" + "a" * 64],
                       "Config": {"Labels": {"org.opencontainers.image.source":
                           "https://github.com/Castor6/sayseed" if index != 1 else "https://github.com/other/app"}}}
                      for index, image in enumerate(images)]
+        inventory[2]["RepoDigests"] = [ghcr + "@sha256:" + "a" * 64]
         def run(*args, **kwargs):
             if args == ("docker", "ps", "-aq"):
                 return "another-service"
@@ -330,6 +333,9 @@ class IdentityAndRetentionTests(unittest.TestCase):
         self.assertEqual(len(plan["remove_backups"]), 3)
         self.assertEqual(plan["remove_images"], [images[2]])
         self.assertIn(images[0], plan["protected_images"])
+        inventory[2]["RepoDigests"].append("unrelated.example/other@sha256:" + "b" * 64)
+        with patch.object(self.u, "run", side_effect=run):
+            self.assertEqual(self.u.retention_plan(now)["remove_images"], [])
 
 
 GNU_TAR = 'GNU tar' in subprocess.run(['tar', '--version'], capture_output=True, text=True).stdout
@@ -398,6 +404,86 @@ class ArchiveTests(unittest.TestCase):
         self.u.restore(self.journal)
         self.assertEqual(self.u.data_snapshot(), self.u.snapshot)
         self.assertTrue((self.u.app / 'compose.production.yaml').exists())
+
+
+class ChannelSwitchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        self.updater = FakeUpdater(root)
+        self.acr = self.updater.repo
+        self.ghcr = 'ghcr.io/castor6/sayseed'
+        self.updater.repositories = {'acr': self.acr, 'ghcr': self.ghcr}
+        self.updater.retained_repositories = {self.acr, self.ghcr}
+        self.updater.config.update(image_repositories=self.updater.repositories,
+                                   retained_image_repositories=[self.acr, self.ghcr])
+        self.updater.config_path = root / 'config.json'
+        module.write_json(self.updater.config_path, self.updater.config)
+        self.updater.release = {**self.updater.old, 'image': self.ghcr + '@sha256:' + 'e' * 64}
+
+    def test_status_is_read_only(self):
+        result = self.updater.status()
+        self.assertEqual(result['selected_channel'], 'acr')
+        self.assertEqual(result['running']['version'], self.updater.old['version'])
+        self.assertNotIn('pull', self.updater.events)
+
+    def test_switch_rejects_busy_lock(self):
+        argv = ['sayseed-update.py', '--config', str(self.updater.config_path), '--switch-channel', 'ghcr']
+        with patch.object(module.sys, 'argv', argv), patch.object(module.fcntl, 'flock', side_effect=BlockingIOError):
+            with self.assertRaisesRegex(RuntimeError, 'Another deployment is active'):
+                module.main()
+        self.assertEqual(json.loads(self.updater.config_path.read_text())['image_repository'], self.acr)
+
+    def test_running_accepts_retained_repository_after_source_change(self):
+        module.write_json(self.updater.state / 'deployed.json', self.updater.old)
+        info = {'RepoDigests': [self.updater.old['image']]}
+        release = {key: self.updater.old[key] for key in ('version', 'commit', 'image_id')}
+        self.updater.image_info = lambda image: (info, release)
+        self.updater.repo = self.ghcr
+        result = module.Updater.running(self.updater)
+        self.assertEqual(result['image'], self.updater.old['image'])
+
+    def test_same_image_switch_does_not_stop_or_backup(self):
+        self.updater.switch_channel('ghcr')
+        self.assertEqual(json.loads(self.updater.config_path.read_text())['image_repository'], self.ghcr)
+        self.assertEqual(len(list(self.updater.state.glob('config-before-switch-*.json'))), 1)
+        module.write_json(self.updater.state / 'deployed.json', self.updater.old)
+        self.updater.update()
+        self.assertNotIn('stop', self.updater.events)
+        self.assertNotIn('backup', self.updater.events)
+
+    def test_dry_run_pull_failure_and_pending_keep_config(self):
+        self.updater.switch_channel('ghcr', dry_run=True)
+        self.assertEqual(json.loads(self.updater.config_path.read_text())['image_repository'], self.acr)
+        self.updater.failure = 'pull'
+        with self.assertRaisesRegex(RuntimeError, 'pull failed'):
+            self.updater.switch_channel('ghcr')
+        self.assertEqual(json.loads(self.updater.config_path.read_text())['image_repository'], self.acr)
+        self.updater.failure = None
+        self.updater.pending.write_text('{}')
+        with self.assertRaisesRegex(RuntimeError, 'Unfinished deployment'):
+            self.updater.switch_channel('ghcr')
+
+    def test_rejects_downgrade_and_failed_release_across_registry(self):
+        self.updater.release.update(version='0.1.0', commit='f' * 40, image_id='sha256:' + '9' * 64)
+        with self.assertRaisesRegex(RuntimeError, 'downgrade'):
+            self.updater.switch_channel('ghcr')
+        self.updater.release['version'] = '0.1.2'
+        module.write_json(self.updater.state / 'failed.json', {'version': '0.1.2', 'commit': 'f' * 40,
+                                                               'image': self.acr + '@sha256:' + '1' * 64})
+        with self.assertRaisesRegex(RuntimeError, 'previously failed'):
+            self.updater.switch_channel('ghcr')
+
+    def test_config_write_failure_keeps_previous_source_and_backup(self):
+        with patch.object(module, 'write_json', side_effect=OSError('write failed')):
+            with self.assertRaisesRegex(OSError, 'write failed'):
+                self.updater.switch_channel('ghcr')
+        self.assertEqual(json.loads(self.updater.config_path.read_text())['image_repository'], self.acr)
+        backups = list(self.updater.state.glob('config-before-switch-*.json'))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(json.loads(backups[0].read_text())['image_repository'], self.acr)
+        self.assertEqual(self.updater.repo, self.acr)
 
 
 if __name__ == '__main__':

@@ -42,6 +42,21 @@ sudo systemctl list-timers sayseed-update.timer
 
 `--dry-run` 会下载并校验候选镜像，可能占用镜像磁盘空间，但不停止应用或部署候选版本。安装配置、维护入口、升级和回滚应先在隔离实例验证。公开模板不代表任何具体服务器已经启用，实际安装事实保存在对应 Task 和私有运维记录。
 
+## 手动选择镜像来源
+
+配置中的 `image_repository` 保存当前来源；`image_repositories` 列出 `acr` 和 `ghcr` 仓库，`retained_image_repositories` 保留曾用仓库以保护旧镜像和备份。切换前，目标仓库须有经过发布验证的 `stable`，服务器须有相应只读拉取权限。
+
+```sh
+sudo python3 /usr/local/lib/sayseed-update/sayseed-update.py --status
+sudo python3 /usr/local/lib/sayseed-update/sayseed-update.py --switch-channel ghcr --dry-run
+sudo python3 /usr/local/lib/sayseed-update/sayseed-update.py --switch-channel ghcr
+sudo python3 /usr/local/lib/sayseed-update/sayseed-update.py --switch-channel acr
+```
+
+这些命令使用同一部署锁。`--status` 不拉取镜像，报告所选来源、运行镜像和事务状态。切换先拉取目标 `stable`，核对来源、平台、版本、提交和镜像内容；然后备份配置到状态目录，原子更新 `image_repository`。`--dry-run` 只验证。目标镜像内容与当前运行镜像相同时，不重启、不备份应用数据；目标为更高版本时，仅保存新来源，由定时更新器完成原有备份与升级流程。网络失败、降级、同版本不同内容、曾失败版本或未完成事务会阻止切换。
+
+命令输出的 `source_switch_complete` 仅表示来源选择命令完成，`same_running_image` 表示目标镜像内容已在运行；切源命令的 `application_updated` 始终为 false。更高版本仍需核对后续更新记录，不能把切换命令成功视为升级成功。宿主机更新器脚本需单独安装。
+
 ## 日常操作与恢复
 
 ```sh

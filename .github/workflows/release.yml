@@ -60,6 +60,16 @@ jobs:
           ref: ${{ needs.source.outputs.commit }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .publication-tools
+          persist-credentials: false
+      - name: Use publication tools from the trusted workflow revision
+        run: |
+          cp .publication-tools/scripts/registry-publication.py scripts/registry-publication.py
+          cp .publication-tools/scripts/publish-release.py scripts/publish-release.py
+          rm -rf .publication-tools
       - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -76,11 +86,15 @@ jobs:
 
   web:
     needs: [source, plan]
+    outputs:
+      artifact_name: web-candidate-${{ needs.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
     if: needs.plan.outputs.web == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
       contents: read
+      statuses: write
+      actions: read
       packages: write
     env:
       RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
@@ -90,7 +104,18 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 2
           persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .publication-tools
+          persist-credentials: false
+      - name: Use publication tools from the trusted workflow revision
+        run: |
+          cp .publication-tools/scripts/registry-publication.py scripts/registry-publication.py
+          cp .publication-tools/scripts/publish-release.py scripts/publish-release.py
+          rm -rf .publication-tools
       - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -99,23 +124,82 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
-      - name: Test the container and publish immutable tags before stable
+      - run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Build and validate one immutable candidate
         env:
           GH_TOKEN: ${{ github.token }}
           ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
           ACR_IMAGE: ${{ vars.ACR_IMAGE }}
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
           ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-        run: python3 scripts/publish-release.py image
+        run: python3 scripts/registry-publication.py prepare
+      - id: candidate
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: web-candidate-${{ needs.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/release/candidate/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist candidate receipt before any registry publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_ARTIFACT_ID: ${{ steps.candidate.outputs.artifact-id }}
+        run: python3 scripts/registry-publication.py receipt
+
+  publish:
+    needs: [source, plan, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [acr, ghcr]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .publication-tools
+          persist-credentials: false
+      - name: Use publication tools from the trusted workflow revision
+        run: |
+          cp .publication-tools/scripts/registry-publication.py scripts/registry-publication.py
+          cp .publication-tools/scripts/publish-release.py scripts/publish-release.py
+          rm -rf .publication-tools
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: ${{ needs.web.outputs.artifact_name }}
+          path: build/release/candidate/
+      - run: sudo apt-get update && sudo apt-get install -y skopeo
+      - name: Publish this channel independently
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
+          ACR_IMAGE: ${{ vars.ACR_IMAGE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+          CHANNEL: ${{ matrix.channel }}
+        run: python3 scripts/registry-publication.py publish --channel "$CHANNEL"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: web-release-${{ needs.source.outputs.commit }}
-          path: build/release/web/
+          name: web-result-${{ matrix.channel }}-${{ needs.source.outputs.commit }}
+          path: build/release/results/
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
   web-release:
-    needs: [source, plan, web]
+    needs: [source, plan, web, publish]
+    if: always() && needs.web.result == 'success' && !cancelled()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -123,17 +207,36 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 2
           persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .publication-tools
+          persist-credentials: false
+      - name: Use publication tools from the trusted workflow revision
+        run: |
+          cp .publication-tools/scripts/registry-publication.py scripts/registry-publication.py
+          cp .publication-tools/scripts/publish-release.py scripts/publish-release.py
+          rm -rf .publication-tools
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
-          name: web-release-${{ needs.source.outputs.commit }}
-          path: build/release/web/
-      - name: Publish the verified web release
+          name: ${{ needs.web.outputs.artifact_name }}
+          path: build/release/candidate/
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: web-result-*-${{ needs.source.outputs.commit }}
+          path: build/release/results/
+          merge-multiple: true
+      - name: Summarize available channels and publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
+          ACR_IMAGE: ${{ vars.ACR_IMAGE }}
           RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
           RELEASE_VERSION: ${{ needs.plan.outputs.web_version }}
-        run: python3 scripts/publish-release.py github --component web --directory build/release/web
+        run: |
+          python3 scripts/registry-publication.py summarize
+          python3 scripts/publish-release.py github --component web --directory build/release/web
 
   extension:
     needs: [source, plan]
@@ -144,7 +247,18 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 2
           persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .publication-tools
+          persist-credentials: false
+      - name: Use publication tools from the trusted workflow revision
+        run: |
+          cp .publication-tools/scripts/registry-publication.py scripts/registry-publication.py
+          cp .publication-tools/scripts/publish-release.py scripts/publish-release.py
+          rm -rf .publication-tools
       - uses: pnpm/action-setup@9fd676a19091d4595eefd76e4bd31c97133911f1 # v4.2.0
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
@@ -163,6 +277,7 @@ jobs:
         with:
           name: extension-release-${{ needs.source.outputs.commit }}
           path: build/release/extension/
+          overwrite: true
           if-no-files-found: error
           retention-days: 30
 
@@ -175,7 +290,18 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.source.outputs.commit }}
+          fetch-depth: 2
           persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .publication-tools
+          persist-credentials: false
+      - name: Use publication tools from the trusted workflow revision
+        run: |
+          cp .publication-tools/scripts/registry-publication.py scripts/registry-publication.py
+          cp .publication-tools/scripts/publish-release.py scripts/publish-release.py
+          rm -rf .publication-tools
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           name: extension-release-${{ needs.source.outputs.commit }}
