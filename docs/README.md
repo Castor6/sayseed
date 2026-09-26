@@ -2,35 +2,20 @@
 
 ## 按需导航
 
-| 需要了解什么 | 文档 |
+| 需要了解什么 | 入口 |
 | --- | --- |
-| 功能、安装和自托管入口 | [项目说明](../README.md) |
-| 产品需求与范围 | [需求记录](requirements.md) |
-| 接口、数据与产品行为约定 | [实现契约](implementation-contract.md) |
-| 本地检查、隔离联调和人工验收 | [验证说明](testing.md) |
+| 功能、安装和自托管 | [项目说明](../README.md) |
+| 项目约束、本地检查、隔离联调和人工验收 | [AGENTS.md](../AGENTS.md) |
+| 当前接口、数据校验与行为 | [共享类型](../packages/shared/src/index.ts)、[API 路由](../apps/web/src/app/api)、[服务端实现与测试](../apps/web/src/server)、[扩展实现与测试](../apps/extension/src) |
 | CI、版本 PR、镜像和扩展发布 | [CI 与版本发布](release.md) |
 | 服务器定时更新、完整备份和失败恢复 | [服务器自动更新](deployment.md) |
-| 记录一次需求、修复或方案讨论 | [Task 模板](tasks/TEMPLATE.md) |
+| 记录需求、设计理由或工作结果 | [AgentNotes](../.agents/skills/agentnotes/SKILL.md)、[Task 模板](tasks/TEMPLATE.md) |
 | 查找历史决定和验证事实 | [任务检索](tasks/INDEX.md) |
-| 长期协作与代码规则 | [AGENTS.md](../AGENTS.md) |
 
-## 一次迭代如何留下记录
+## Task 记录与历史资料
 
-1. 开始时创建或续接 `docs/tasks/TASK-YYYYMMDD-short-topic.md`，写清背景、目标、验收标准和维护归属。
-2. 讨论中记录已经确认的范围与关键取舍；推荐方案、开放问题和已确认决定分别标明。
-3. 完成后写实际修改、验证日期、代码基线、检查结果和未覆盖范围，附必要的文件或 PR 链接。
-4. 将仍会影响未来工作的规则同步到需求、契约、验证方法或协作文档；Task 保留为什么这样决定及当时的证据。
+项目级安装的 AgentNotes 提供通用记录与回顾方法，继续使用现有 `docs/tasks/`、中文模板和固定检索说明。精炼的项目约束与验证方法放入 `AGENTS.md` 或模块规则；后续需求讨论、设计原因与实际验证进入对应 Task。
 
-助手随工作维护记录，用户不需要手工整理每次对话。任务文件是带日期的工作事实，验收勾选仅表示本次已有证据，不代表后续 CI、合并、发布或上线。
+原 `requirements.md`、`implementation-contract.md` 和 `testing.md` 已停止作为长期文档维护，内容保存在[历史快照](tasks/TASK-20260926-project-documentation-snapshot.md)，仅供按需回顾。归档原因和本次验证见[接入任务](tasks/TASK-20260926-agentnotes-adoption.md)。快照中的测试数字和未覆盖范围属于原记录，不能证明当前代码的状态。
 
-每个任务由一个会话或工作分支负责维护；接续同一工作时更新维护归属并补充日期，独立工作另建文件互相引用。不要共同维护一个大进度表。`tasks/INDEX.md` 只提供固定检索说明，新任务不需要登记；需要总目录时可临时生成，不提交生成结果。
-
-## 长期文档与历史事实
-
-- `requirements.md` 和 `implementation-contract.md` 维护仍有效的产品及接口约定，发生变化时随实现一起更新。
-- `testing.md` 保留可复现的验证方法及已有历史记录；其中各轮测试数字和结果只代表记录当时，不能代替当前验证。
-- 新一轮迭代的执行结果进入该轮 Task；可复用的新测试方法再补充到 `testing.md`。
-- Task 不复制整段聊天、原始日志或 Git 操作流水，不追踪会不断变化的 PR/CI/部署状态。外部进展查相关系统，已发生的事实可附日期和证据链接。
-- 通用方案随代码维护；真实部署地址、凭据、数据库、模型调用内容和备份留在私有运维资料中。
-
-这套约定参考 [Memos 的任务模板](https://github.com/Castor6/memos/blob/main/docs/tasks/TEMPLATE.md)和[检索方式](https://github.com/Castor6/memos/blob/main/docs/tasks/INDEX.md)，按 Sayseed 的工作区与文档结构调整。
+真实部署地址、凭据、数据库、模型调用内容和备份继续留在私有运维资料中。
