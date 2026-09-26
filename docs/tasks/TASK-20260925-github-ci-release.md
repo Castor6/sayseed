@@ -27,7 +27,7 @@
 
 现有根 [package.json](../../package.json)提供 `pnpm typecheck`、`pnpm test`、`pnpm build` 和 `pnpm test:smoke`。CI 调用同一套命令，后续添加到现有测试集合的用例也随之运行，无需维护第二套业务测试。
 
-干净环境需固定 Node 与 pnpm、使用锁文件安装、生成 Next.js 路由类型。HTTP 联调还需编排模拟模型服务、临时数据库、隔离应用实例、就绪等待和进程清理，见[验证说明](../testing.md)。补充 Docker 构建、实际启动及升级验证后，才能覆盖部署产物。现有单元测试不能替代真实 X 扩展、iPhone/PWA 或模型质量验收。
+干净环境需固定 Node 与 pnpm、使用锁文件安装、生成 Next.js 路由类型。HTTP 联调还需编排模拟模型服务、临时数据库、隔离应用实例、就绪等待和进程清理，见[当时的验证说明（历史快照）](TASK-20260926-project-documentation-snapshot.md#原-docstestingmd)。补充 Docker 构建、实际启动及升级验证后，才能覆盖部署产物。现有单元测试不能替代真实 X 扩展、iPhone/PWA 或模型质量验收。
 
 ### GitHub 与发布建议
 
