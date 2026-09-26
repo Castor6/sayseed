@@ -17,6 +17,33 @@ export interface Model { id: string; connectionId: string; name: string; modelId
 export interface DiscoveredModel { id: string; name: string; description?: string; capabilities?: ModelCapabilities }
 export interface DiscoveredModelsResult { models: DiscoveredModel[]; truncated: boolean }
 
+export const promptKindSchema = z.enum(['translate', 'explain']);
+export type PromptKind = z.infer<typeof promptKindSchema>;
+export const PROMPT_BODY_LIMIT = 20000;
+const promptBodySchema = z.string().max(PROMPT_BODY_LIMIT).refine(value => value.trim().length > 0, '提示词正文不能为空');
+export const promptDraftSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('default') }).strict(),
+  z.object({ mode: z.literal('custom'), body: promptBodySchema }).strict(),
+]);
+export type PromptDraft = z.infer<typeof promptDraftSchema>;
+const promptSaveVersion = {
+  revision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  defaultVersion: z.string().min(1).max(100), protocolVersion: z.string().min(1).max(100),
+};
+export const promptSaveSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('default'), ...promptSaveVersion }).strict(),
+  z.object({ mode: z.literal('custom'), body: promptBodySchema, ...promptSaveVersion }).strict(),
+]);
+export type PromptSaveInput = z.infer<typeof promptSaveSchema>;
+export interface PromptVersionInfo {
+  kind: PromptKind; mode: 'default' | 'custom'; revision: number;
+  defaultVersion: string; protocolVersion: string;
+}
+export interface PromptRevision extends PromptVersionInfo { body: string; updatedAt: string | null }
+export interface PromptSetting extends PromptRevision { defaultBody: string; fixedRules: string; system: string }
+export interface PromptSettingsResult { prompts: PromptSetting[] }
+export interface PromptHistoryResult { items: PromptRevision[]; total: number; limit: number; offset: number }
+
 export type UsagePurpose = 'translate' | 'explain' | 'test';
 export type UsageStatus = 'success' | 'error' | 'cancelled';
 export interface UsageRecord {
@@ -42,6 +69,7 @@ export type UsageContentPart = { type: 'text'; text: string } | {
 };
 export interface UsageContext {
   system: string | null;
+  prompt?: PromptVersionInfo;
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: UsageContentPart[] }>;
   options: Record<string, unknown>;
   output: { text: string; reasoning: string } | null;

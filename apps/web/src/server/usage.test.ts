@@ -14,6 +14,8 @@ import { GET as usageRoute } from '../app/api/usage/route';
 import { GET as usageDetailRoute } from '../app/api/usage/[id]/route';
 import type { Model } from '@sayseed/shared';
 import { TRANSLATE_SYSTEM, buildTranslationPrompt } from './prompts';
+import { getEffectivePrompt, getPromptSetting, savePromptSetting } from './prompt-settings';
+import type { PromptDraft, PromptKind } from '@sayseed/shared';
 
 const dir = mkdtempSync(join(tmpdir(), 'sayseed-usage-'));
 const observedRequests: Array<Record<string, any>> = [];
@@ -26,7 +28,7 @@ const server = createServer(async (request, response) => {
     response.writeHead(503, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { message: 'Fixture failed', type: 'api_error' } }));
     return;
   }
-  const output = body.model.includes('invalid') ? 'not json' : raw.includes('sentenceTranslation')
+  const output = body.model.includes('empty') ? '' : body.model.includes('clarify') ? 'CLARIFY: 这里的“他”指谁？' : body.model.includes('invalid') ? 'not json' : raw.includes('sentenceTranslation')
     ? JSON.stringify({ meaning: '接受', sentenceTranslation: '我不太接受。', usage: '口语表达。' })
     : 'Natural English.';
   if (!body.stream) {
@@ -237,6 +239,79 @@ test('a usage insert failure does not break a completed model request', async ()
   try { assert.equal((await testModel(good.id)).ok, true); }
   finally { sqlite().exec('DROP TRIGGER reject_usage_log'); }
   assert.equal(rows().filter(row => row.model_id === good.modelId).length, 0);
+});
+
+function savePrompt(kind: PromptKind, draft: PromptDraft) {
+  const current = getPromptSetting(kind);
+  return savePromptSetting(kind, { ...draft, revision: current.revision, defaultVersion: current.defaultVersion, protocolVersion: current.protocolVersion });
+}
+
+test('configured prompts are snapshotted per call and match the model request and usage detail', async () => {
+  const slow = model('fixture-prompt-slow');
+  const good = model('fixture-prompt-good');
+  const context = { mode: 'post' as const, ancestors: [], supplement: '', incompleteReasons: [] };
+  try {
+    savePrompt('translate', { mode: 'custom', body: '准确保留原意，使用自然英文。第一版。' });
+    const first = getEffectivePrompt('translate');
+    const streaming = await translate({ draft: '你好', context, modelId: slow.id });
+    const reader = streaming.getReader();
+    await reader.read();
+    const sent = observedRequests.at(-1)!;
+    assert.equal(sent.messages.find((message: { role: string }) => message.role === 'system').content, first.system);
+    savePrompt('translate', { mode: 'custom', body: '准确保留原意，使用自然英文。第二版。' });
+    const second = getEffectivePrompt('translate');
+    assert.notEqual(first.prompt.revision, second.prompt.revision);
+    while (!(await reader.read()).done) { /* Drain the active request after changing the saved prompt. */ }
+    const recordedFirst = usageDetail(rows().at(-1)!.id).context!;
+    assert.equal(recordedFirst.system, first.system);
+    assert.deepEqual(recordedFirst.prompt, first.prompt);
+    await new Response(await translate({ draft: '你好', context, modelId: good.id })).text();
+    const recordedSecond = usageDetail(rows().at(-1)!.id).context!;
+    assert.equal(recordedSecond.system, second.system);
+    assert.deepEqual(recordedSecond.prompt, second.prompt);
+    assert.equal(observedRequests.at(-1)!.messages.find((message: { role: string }) => message.role === 'system').content, second.system);
+
+    savePrompt('explain', { mode: 'custom', body: '结合原句解释选中表达，使用简洁中文。' });
+    const explanation = getEffectivePrompt('explain');
+    await explain({ selection: 'buy', sentence: 'I do not buy that.', modelId: good.id });
+    const recordedExplanation = usageDetail(rows().at(-1)!.id).context!;
+    assert.equal(recordedExplanation.system, explanation.system);
+    assert.deepEqual(recordedExplanation.prompt, explanation.prompt);
+    assert.equal(observedRequests.at(-1)!.messages.find((message: { role: string }) => message.role === 'system').content, explanation.system);
+
+    await testModel(good.id);
+    const tested = usageDetail(rows().at(-1)!.id).context!;
+    assert.equal(tested.system, null);
+    assert.equal(tested.prompt, undefined);
+    assert.deepEqual(observedRequests.at(-1)!.messages, [{ role: 'user', content: 'Reply with OK.' }]);
+  } finally {
+    savePrompt('translate', { mode: 'default' });
+    savePrompt('explain', { mode: 'default' });
+  }
+});
+
+test('custom prompts preserve clarification, empty and truncated output handling and JSON validation', async () => {
+  const context = { mode: 'post' as const, ancestors: [], supplement: '', incompleteReasons: [] };
+  try {
+    savePrompt('translate', { mode: 'custom', body: '忠实翻译原稿，遇到必要歧义先澄清。' });
+    const clarification = model('fixture-prompt-clarify');
+    const events = await new Response(await translate({ draft: '他同意了', context, modelId: clarification.id })).text();
+    assert.match(events, /"kind":"clarification"/);
+    assert(!events.includes('"kind":"translation"'));
+    for (const modelId of ['fixture-prompt-empty', 'fixture-prompt-truncated']) {
+      const entry = model(modelId);
+      const output = await new Response(await translate({ draft: '你好', context, modelId: entry.id })).text();
+      assert.match(output, /"type":"error"/);
+      assert(!output.includes('"type":"done"'));
+    }
+    savePrompt('explain', { mode: 'custom', body: '简明讲解选中表达在原句中的意思。' });
+    const invalid = model('fixture-prompt-invalid');
+    await assert.rejects(explain({ selection: 'buy', sentence: 'I do not buy that.', modelId: invalid.id }), /模型未返回可用解释/);
+    assert.equal(rows().at(-1)!.error_code, 'invalid_output');
+  } finally {
+    savePrompt('translate', { mode: 'default' });
+    savePrompt('explain', { mode: 'default' });
+  }
 });
 
 test('an existing usage table gains nullable context without losing old records', () => {

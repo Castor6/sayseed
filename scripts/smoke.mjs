@@ -44,7 +44,7 @@ async function setEffortListMode(mode) {
 try {
   await setEffortListMode('normal');
   const mockRequestStart = (await mockRequests()).length;
-  for (const path of ['/models', '/connections', '/notes', '/review', '/export', '/usage']) await call(path, 'GET', undefined, 401, false);
+  for (const path of ['/models', '/connections', '/notes', '/review', '/export', '/usage', '/prompts']) await call(path, 'GET', undefined, 401, false);
   const session = await call('/session', 'GET', undefined, 200, false);
   assert.equal(session.authenticated, false);
   assert.equal(session.configured, true);
@@ -229,7 +229,42 @@ try {
   await call(`/usage/${translatedUsage.id}`, 'GET', undefined, 401, false);
   await call('/usage/missing-record', 'GET', undefined, 404);
   await call('/usage?limit=101', 'GET', undefined, 400);
-  console.log(`PASS: ${checked} HTTP checks, provider discovery, reasoning settings, generation, usage records, notes and idempotent review. Browser QA model: ${browserQaModel.name} (${browserQaModel.id}).`);
+  const promptSettings = await call('/prompts');
+  assert.deepEqual(promptSettings.prompts.map(prompt => prompt.kind).sort(), ['explain', 'translate']);
+  await call('/prompts/test', 'GET', undefined, 400);
+  for (const original of promptSettings.prompts) {
+    const path = `/prompts/${original.kind}`;
+    const customBody = original.kind === 'translate' ? '忠实表达原意，使用自然英文。HTTP 联调测试。' : '用简洁中文解释选中表达在原句中的含义。HTTP 联调测试。';
+    const draft = { mode: 'custom', body: customBody };
+    const version = { revision: original.revision, defaultVersion: original.defaultVersion, protocolVersion: original.protocolVersion };
+    const beforePreview = (await mockRequests()).length;
+    const preview = await call(`${path}/preview`, 'POST', draft);
+    assert.equal((await mockRequests()).length, beforePreview, 'Preview must not call a model');
+    assert.equal((await call(path)).prompt.revision, original.revision, 'Preview must not save a draft');
+    try {
+      const configured = (await call(path, 'PATCH', { ...draft, ...version })).prompt;
+      assert.equal(configured.system, preview.system);
+      assert.equal(configured.revision, original.revision + 1);
+      await call(path, 'PATCH', { ...draft, ...version }, 409);
+      const history = await call(`${path}/history?limit=2&offset=0`);
+      assert.equal(history.items[0].body, customBody);
+      assert.equal(history.items[0].revision, configured.revision);
+      if (original.kind === 'translate') await translate(browserQaModel.id);
+      else await call('/explain', 'POST', { selection: 'buy', sentence: 'I do not buy that.', modelId: browserQaModel.id });
+      const recent = await call(`/usage?purpose=${original.kind}&modelId=${browserQaModel.id}&limit=1`);
+      const recorded = await call(`/usage/${recent.items[0].id}`);
+      assert.equal(recorded.context.system, preview.system);
+      assert.equal(recorded.context.prompt.revision, configured.revision);
+      assert.equal(recorded.context.prompt.kind, original.kind);
+      assert.equal(recorded.context.prompt.mode, 'custom');
+      assert.equal(recorded.context.prompt.protocolVersion, configured.protocolVersion);
+    } finally {
+      const current = (await call(path)).prompt;
+      const restored = (await call(path, 'PATCH', { mode: original.mode, ...(original.mode === 'custom' ? { body: original.body } : {}), revision: current.revision, defaultVersion: current.defaultVersion, protocolVersion: current.protocolVersion })).prompt;
+      assert.equal(restored.system, original.system);
+    }
+  }
+  console.log(`PASS: ${checked} HTTP checks, provider discovery, reasoning and prompt settings, generation, usage records, notes and idempotent review. Browser QA model: ${browserQaModel.name} (${browserQaModel.id}).`);
 } finally {
   await setEffortListMode('normal').catch(console.error);
   for (const id of notes) await call(`/notes/${id}`, 'DELETE').catch(console.error);

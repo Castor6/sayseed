@@ -65,6 +65,15 @@ export function sqlite(): Database.Database {
       reasoning_effort TEXT, error_code TEXT, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER,
       reasoning_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER, context_json TEXT
     );
+    CREATE TABLE IF NOT EXISTS prompt_settings (
+      kind TEXT PRIMARY KEY, mode TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL,
+      default_version TEXT NOT NULL, protocol_version TEXT NOT NULL, updated_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS prompt_revisions (
+      kind TEXT NOT NULL, revision INTEGER NOT NULL, mode TEXT NOT NULL, body TEXT NOT NULL,
+      default_version TEXT NOT NULL, protocol_version TEXT NOT NULL, updated_at TEXT,
+      PRIMARY KEY (kind, revision)
+    );
     CREATE INDEX IF NOT EXISTS cards_due_idx ON cards(due);
     CREATE INDEX IF NOT EXISTS notes_created_idx ON notes(created_at);
     CREATE INDEX IF NOT EXISTS usage_started_idx ON usage_logs(started_at DESC, id DESC);
