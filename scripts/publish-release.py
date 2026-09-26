@@ -15,7 +15,7 @@ class PublishError(RuntimeError):
 
 
 def run(*args, input=None, binary=False):
-    result = subprocess.run(args, input=input, capture_output=True, text=not binary)
+    result = subprocess.run(args, input=input, capture_output=True, text=not binary, timeout=300)
     if result.returncode:
         error = result.stderr.decode() if binary else result.stderr
         raise PublishError(f"{args[0]} {args[1]} failed: {error.strip()}")
@@ -56,7 +56,7 @@ def local_image(ref):
 
 
 def remote_image(ref):
-    result = subprocess.run(["docker", "manifest", "inspect", ref], capture_output=True, text=True)
+    result = subprocess.run(["docker", "manifest", "inspect", ref], capture_output=True, text=True, timeout=300)
     if result.returncode:
         error = result.stderr.lower()
         # Only the registry's explicit missing-manifest response permits first publication.
@@ -185,7 +185,7 @@ def api(path, method="GET", data=None, missing=False):
     args = ["gh", "api", path, "--method", method]
     if data is not None:
         args += ["--input", "-"]
-    result = subprocess.run(args, input=json.dumps(data) if data is not None else None, capture_output=True, text=True)
+    result = subprocess.run(args, input=json.dumps(data) if data is not None else None, capture_output=True, text=True, timeout=300)
     if result.returncode:
         if missing and "(HTTP 404)" in result.stderr:
             return None
