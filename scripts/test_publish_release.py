@@ -33,7 +33,7 @@ class RegistryTests(unittest.TestCase):
                              ("ghcr.io", "ghcr.io/example/sayseed", "example", "job-token"))
 
     def test_explicit_acr_uses_only_acr_credentials(self):
-        env = {"IMAGE_CHANNEL": "acr", "ACR_REGISTRY": "registry.example", "ACR_IMAGE": IMAGE,
+        env = {"ACR_REGISTRY": "registry.example", "ACR_IMAGE": IMAGE,
                "ACR_USERNAME": "publisher", "ACR_PASSWORD": "registry-token", "GH_TOKEN": "job-token"}
         with patch.dict(os.environ, env, clear=True):
             self.assertEqual(publish.registry_credentials(REPO),
@@ -41,7 +41,7 @@ class RegistryTests(unittest.TestCase):
 
     def test_partial_acr_configuration_does_not_fall_back(self):
         for key, value in [("ACR_REGISTRY", "registry.example"), ("ACR_IMAGE", IMAGE)]:
-            with self.subTest(key=key), patch.dict(os.environ, {key: value, "IMAGE_CHANNEL": "acr", "GITHUB_ACTOR": "example", "GH_TOKEN": "job-token"}, clear=True):
+            with self.subTest(key=key), patch.dict(os.environ, {key: value, "GITHUB_ACTOR": "example", "GH_TOKEN": "job-token"}, clear=True):
                 with self.assertRaises(publish.PublishError):
                     publish.registry_credentials(REPO)
 
@@ -90,7 +90,7 @@ class ImageGuardTests(unittest.TestCase):
             if previous and ref.endswith(":stable"):
                 return image("1.1.0", "sha256:previous")
             return None
-        env = {"IMAGE_CHANNEL": "acr", "ACR_REGISTRY": "registry.example", "ACR_IMAGE": IMAGE, "ACR_USERNAME": "fake", "ACR_PASSWORD": "fake"}
+        env = {"ACR_REGISTRY": "registry.example", "ACR_IMAGE": IMAGE, "ACR_USERNAME": "fake", "ACR_PASSWORD": "fake"}
         if ghcr:
             env = {"GITHUB_ACTOR": "example", "GH_TOKEN": "job-token"}
         if not existing:
