@@ -102,7 +102,6 @@ jobs:
       - name: Test the container and publish immutable tags before stable
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE_CHANNEL: ${{ vars.IMAGE_CHANNEL || 'ghcr' }}
           ACR_REGISTRY: ${{ vars.ACR_REGISTRY }}
           ACR_IMAGE: ${{ vars.ACR_IMAGE }}
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}

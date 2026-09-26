@@ -72,13 +72,7 @@ class Updater:
         self.marker = self.state / "maintenance"
         self.pending = self.state / "pending.json"
         self.repo = config["image_repository"]
-        retained = config.get("retained_image_repositories", [])
-        if not isinstance(retained, list) or len(retained) > 2:
-            raise ValueError("Expected at most two retained repositories")
-        self.repositories = [self.repo, *retained]
-        if len(set(self.repositories)) != len(self.repositories) or any(
-                not isinstance(repo, str) or not re.fullmatch(r"[a-z0-9.-]+/[a-z0-9_./-]+", repo)
-                for repo in self.repositories):
+        if not re.fullmatch(r"[a-z0-9.-]+/[a-z0-9_./-]+", self.repo):
             raise ValueError("Invalid registry repository")
         for path in (self.app, self.state, self.backups):
             if str(path) in ("/", "/opt", "/etc", "/var", "/var/lib"):
@@ -169,15 +163,13 @@ class Updater:
         if not container.get("State", {}).get("Running"):
             raise RuntimeError("Existing service must be running")
         info, release = self.image_info(container["Image"])
-        digests = [v for v in info.get("RepoDigests", []) if any(v.startswith(repo + "@sha256:") for repo in self.repositories)]
-        if digests:
-            recorded = self.read_state("deployed.json").get("image")
-            release["image"] = recorded if recorded in digests else sorted(digests)[0]
+        digests = [v for v in info.get("RepoDigests", []) if v.startswith(self.repo + "@sha256:")]
+        if len(digests) == 1:
+            release["image"] = digests[0]
         else:
             deployed = self.read_state("deployed.json")
             if (digests or deployed.get("image_id") != release["image_id"]
-                    or not any(re.fullmatch(re.escape(repo) + r"@sha256:[0-9a-f]{64}", deployed.get("image", ""))
-                               for repo in self.repositories)):
+                    or not re.fullmatch(re.escape(self.repo) + r"@sha256:[0-9a-f]{64}", deployed.get("image", ""))):
                 raise RuntimeError("Running image digest cannot be verified")
             release["image"] = deployed["image"]
         self.volume()
@@ -222,19 +214,18 @@ class Updater:
         return json.loads(path.read_text()) if path.exists() else {}
 
     def candidate(self):
-        # Only the explicitly selected channel is contacted; no automatic failover.
-        repository = self.repo
+        # Pull happens before maintenance or stopping the old service.
         for attempt in range(3):
             try:
-                self.run("docker", "pull", repository + ":stable", timeout=300)
+                self.run("docker", "pull", self.repo + ":stable", timeout=300)
                 break
             except (subprocess.SubprocessError, OSError):
                 if attempt == 2:
                     raise
                 time.sleep(5)
-        info, release = self.image_info(repository + ":stable")
-        digests = [value for value in info.get("RepoDigests", []) if value.startswith(repository + "@sha256:")]
-        if len(digests) != 1 or not re.fullmatch(re.escape(repository) + r"@sha256:[0-9a-f]{64}", digests[0]):
+        info, release = self.image_info(self.repo + ":stable")
+        digests = [value for value in info.get("RepoDigests", []) if value.startswith(self.repo + "@sha256:")]
+        if len(digests) != 1 or not re.fullmatch(re.escape(self.repo) + r"@sha256:[0-9a-f]{64}", digests[0]):
             raise RuntimeError("Expected one registry digest")
         return {**release, "image": digests[0]}
 
@@ -380,7 +371,7 @@ class Updater:
                 continue
             digests = info.get("RepoDigests") or []
             # Only this application and the configured repository are eligible.
-            repos = tuple(self.repositories)
+            repos = (self.repo,)
             source = (info.get("Config", {}).get("Labels") or {}).get("org.opencontainers.image.source")
             if source != "https://github.com/Castor6/sayseed" or not any(d.startswith(repo + "@sha256:") for d in digests for repo in repos):
                 continue
@@ -546,13 +537,12 @@ class Updater:
             self.pin(old["image"])
             write_json(self.state / "deployed.json", old)
         candidate = self.candidate()
-        if (candidate["image"].split("@")[-1] == old["image"].split("@")[-1]
-                and all(candidate[k] == old[k] for k in ("version", "commit", "image_id"))):
+        if candidate["image"] == old["image"]:
             print("Already running the published digest")
             return
         if version_tuple(candidate["version"]) <= version_tuple(old["version"]):
             raise RuntimeError("Release channel would downgrade or replace an existing version")
-        if not retry and self.read_state("failed.json").get("image", "").split("@")[-1] == candidate["image"].split("@")[-1]:
+        if not retry and self.read_state("failed.json").get("image") == candidate["image"]:
             raise RuntimeError("This digest previously failed; inspect before --retry")
         if dry_run:
             print("Candidate verified: " + candidate["version"])
