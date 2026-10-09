@@ -167,11 +167,11 @@ describe('post extraction and session identity', () => {
     expect(contextIdentity(a)).not.toBe(contextIdentity(b));
   });
 
-  it('refuses to overwrite a changed editor draft', () => {
+  it('refuses to overwrite a changed editor draft', async () => {
     document.body.innerHTML = editor();
     const node = document.querySelector<HTMLElement>('[contenteditable]')!;
     node.textContent = '另一份草稿';
-    expect(replaceEditorText(node, '我想试试', 'English')).toBe(false);
+    expect(await replaceEditorText(node, '我想试试', 'English')).toBe('conflict');
     expect(node.textContent).toBe('另一份草稿');
   });
 

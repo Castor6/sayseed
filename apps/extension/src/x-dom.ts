@@ -4,9 +4,7 @@ export const EDITOR_SELECTOR = '[data-testid="tweetTextarea_0"][contenteditable=
 export const ASSISTANT_BUTTON_STYLE = 'display:inline-flex;align-items:center;justify-content:center;align-self:center;vertical-align:middle;border:0;background:transparent;color:#16955d;font:700 14px/1 system-ui;padding:5px 8px;margin-left:6px;white-space:nowrap;flex-shrink:0;cursor:pointer;';
 const STATUS_LINK = 'a[href*="/status/"]';
 
-export function editorText(editor: HTMLElement): string {
-  return (editor.innerText || editor.textContent || '').trim();
-}
+export { editorText, replaceEditorText } from './x-editor';
 
 export function currentEditorTarget(editor: HTMLElement): HTMLElement {
   const dialog = editor.closest('[role="dialog"]');
@@ -184,20 +182,4 @@ export function classifyEditor(editor: HTMLElement, capturedReply?: CapturedTarg
     return { mode: 'reply', ancestors: [], target, supplement: '', incompleteReasons: target ? [] : ['未能读取当前帖子，请手动补充内容'] };
   }
   return { mode: 'post', ancestors: [], supplement: '', incompleteReasons: [] };
-}
-
-export function replaceEditorText(editor: HTMLElement, expected: string, next: string): boolean {
-  if (!editor.isConnected || editorText(editor) !== expected) return false;
-  editor.focus();
-  const selection = document.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(editor);
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  const inserted = document.execCommand('insertText', false, next);
-  if (!inserted) {
-    editor.textContent = next;
-    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: next }));
-  }
-  return true;
 }
