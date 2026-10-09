@@ -6,12 +6,12 @@ import { editorText, replaceEditorText } from './x-dom';
 import { captureSelection, type CapturedSelection } from './selection';
 import { adjacentPanel, useDraggablePanel } from './draggable-panel';
 
-function PostContext(props: { label: string; post?: ContextPost; onRemove: () => void; onChange: (post: ContextPost) => void }) {
+function PostContext(props: { label: string; disabled?: boolean; post?: ContextPost; onRemove: () => void; onChange: (post: ContextPost) => void }) {
   if (!props.post) return null;
   return <div className="context">
-    <div className="row between"><strong>{props.label}</strong><button className="small" onClick={props.onRemove}>移除</button></div>
+    <div className="row between"><strong>{props.label}</strong><button className="small" disabled={props.disabled} onClick={props.onRemove}>移除</button></div>
     <div className="muted">{props.post.author} {props.post.url}</div>
-    <textarea aria-label={`${props.label}正文`} value={props.post.text} onChange={e => props.onChange({ ...props.post!, text: e.target.value })} />
+    <textarea disabled={props.disabled} aria-label={`${props.label}正文`} value={props.post.text} onChange={e => props.onChange({ ...props.post!, text: e.target.value })} />
     {!props.post.text && !!props.post.images.length && <p className="muted">这条帖子只有图片；可在补充语境中说明需要参考的内容。</p>}
   </div>;
 }
@@ -29,6 +29,9 @@ export function XAssistant(props: { editor: HTMLElement; initialContext: Transla
   const [showContext, setShowContext] = useState(false);
   const [explainInput, setExplainInput] = useState<{ input: Pick<CapturedSelection, 'selection' | 'sentence' | 'context'> & { modelId?: string }; sourceUrl: string; sourceTitle: string; draftZh: string } | null>(null);
   const [adopted, setAdopted] = useState<{ before: string; after: string } | null>(null);
+  const [replacing, setReplacing] = useState(false);
+  const replacement = useRef<AbortController | null>(null);
+  const alive = useRef(true);
   const [position, setPosition] = useState({ top: 12, left: 12 });
   const request = useRef<TranslationStream | null>(null);
   const requestId = useRef(0);
@@ -38,6 +41,11 @@ export function XAssistant(props: { editor: HTMLElement; initialContext: Transla
   const floating = useDraggablePanel(position);
   const explainPlacement = adjacentPanel(floating.point, Math.min(420, window.innerWidth - 24), Math.min(420, window.innerWidth - 24), window.innerWidth);
 
+  useLayoutEffect(() => {
+    alive.current = true;
+    setReplacing(false);
+    return () => { alive.current = false; replacement.current?.abort(); replacement.current = null; };
+  }, [props.editor]);
   useEffect(() => {
     let active = true;
     models().then(list => { if (active) { setAvailableModels(list); setModelId(list.find(model => model.isDefault)?.id || list[0]?.id || ''); } }).catch(e => { if (active) setMessage(e instanceof Error ? e.message : '无法加载模型'); });
@@ -59,6 +67,7 @@ export function XAssistant(props: { editor: HTMLElement; initialContext: Transla
   }, [output, partial, status]);
 
   function generate() {
+    if (replacement.current || !alive.current) return;
     if (!props.isCurrent()) { setStatus('error'); setMessage('回复对象已改变，请重新打开助手'); return; }
     const currentDraft = editorText(props.editor);
     if (!currentDraft) { setMessage('请先在 X 输入框写中文'); return; }
@@ -81,18 +90,53 @@ export function XAssistant(props: { editor: HTMLElement; initialContext: Transla
     });
   }
   function cancel() { requestId.current++; request.current?.cancel(); request.current = null; setPartial(''); setStatus('idle'); }
+  function close() {
+    alive.current = false;
+    replacement.current?.abort();
+    requestId.current++;
+    request.current?.cancel();
+    props.onClose();
+  }
+  async function replace(before: string, after: string, undoing: boolean) {
+    if (replacement.current || !alive.current) return;
+    const controller = new AbortController();
+    replacement.current = controller;
+    setReplacing(true);
+    setMessage('正在验证 X 输入框，请稍候…');
+    try {
+      const result = await replaceEditorText(props.editor, before, after, { signal: controller.signal, isCurrent: () => alive.current && !controller.signal.aborted && props.isCurrent() });
+      if (!alive.current || controller.signal.aborted) return;
+      if (!props.isCurrent()) { setMessage('回复对象已改变，已停止回填验证；请检查输入框内容。'); return; }
+      if (result === 'applied') {
+        expectedEditor.current = after;
+        setAdopted(undoing ? null : { before, after });
+        setMessage(undoing ? '已撤回本次回填' : '已回填到 X。发布前请检查。');
+      } else if (result === 'conflict') {
+        setMessage(undoing ? '输入框已改变，无法自动撤回' : '原输入框已改变，已阻止覆盖；可复制译文。');
+      } else {
+        setMessage(undoing ? '无法确认 X 已完整撤回，请检查输入框内容；如需采用译文，请复制译文后在 X 输入框中全选并重新粘贴。' : '无法确认 X 已完整接收译文，请复制译文后在 X 输入框中全选并重新粘贴，发布前检查内容。');
+      }
+    } catch {
+      if (alive.current && !controller.signal.aborted) setMessage('无法确认 X 输入框内容，请检查草稿；如需采用译文，请复制译文后全选并重新粘贴。');
+    } finally {
+      if (replacement.current === controller) {
+        replacement.current = null;
+        if (alive.current && !controller.signal.aborted) setReplacing(false);
+      }
+    }
+  }
   function adopt() {
-    if (status !== 'ready' || !output.trim()) return;
+    if (replacement.current || !alive.current || status !== 'ready' || !output.trim()) return;
     if (!props.isCurrent()) { setMessage('回复对象已改变，已阻止回填'); return; }
     const before = expectedEditor.current;
-    if (before === output && editorText(props.editor) === output) { setMessage('这份译文已经采用'); return; }
-    if (replaceEditorText(props.editor, before, output)) { setAdopted({ before, after: output }); expectedEditor.current = output; setMessage('已回填到 X。发布前请检查。'); }
-    else { setMessage('原输入框已改变，已阻止覆盖；可复制译文。'); }
+    const after = output.replace(/\r\n?/g, '\n').trim();
+    if (adopted?.after === after && before === after && editorText(props.editor) === after) { setMessage('这份译文已经采用'); return; }
+    void replace(before, after, false);
   }
   function undo() {
+    if (replacement.current || !alive.current) return;
     if (!adopted || !props.isCurrent()) { setMessage('回复对象已改变，无法自动撤回'); return; }
-    if (replaceEditorText(props.editor, adopted.after, adopted.before)) { expectedEditor.current = adopted.before; setAdopted(null); setMessage('已撤回本次回填'); }
-    else { setMessage('输入框已改变，无法自动撤回'); }
+    void replace(adopted.after, adopted.before, true);
   }
   function explainSelection() {
     const element = outputElement.current;
@@ -106,24 +150,24 @@ export function XAssistant(props: { editor: HTMLElement; initialContext: Transla
   const updatePost = (kind: 'target' | 'quoted', post?: ContextPost) => setContext(old => ({ ...old, [kind]: post }));
   return <>
     <div ref={floating.ref} className={explainInput && explainPlacement.overlay ? 'panel panel-obscured' : 'panel'} role="dialog" aria-label="Sayseed 英文助手" style={floating.style}>
-      <div className="row between drag-handle" {...floating.handleProps}><strong className="title">Sayseed · {context.mode === 'post' ? '发帖' : context.mode === 'quote' ? '引用' : '回复'}</strong><button className="small" onClick={props.onClose}>关闭</button></div>
-      <div className="section"><label className="label">模型</label><select value={modelId} onChange={e => setModelId(e.target.value)}>{availableModels.length ? availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>) : <option value="">默认模型</option>}</select></div>
+      <div className="row between drag-handle" {...floating.handleProps}><strong className="title">Sayseed · {context.mode === 'post' ? '发帖' : context.mode === 'quote' ? '引用' : '回复'}</strong><button className="small" onClick={close}>关闭</button></div>
+      <div className="section"><label className="label">模型</label><select disabled={replacing} value={modelId} onChange={e => setModelId(e.target.value)}>{availableModels.length ? availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>) : <option value="">默认模型</option>}</select></div>
       <div className="row"><button className="small" onClick={() => setShowContext(!showContext)}>{showContext ? '收起' : '查看'}上下文</button><span className="muted">中文原稿：{draft.slice(0, 80)}{draft.length > 80 ? '…' : ''}</span></div>
       {!showContext && context.incompleteReasons.map(reason => <p className="notice" key={reason}>{reason}</p>)}
       {showContext && <div className="section">
         <p className="muted">翻译只参考帖子文字；图片不会发送给模型。</p>
-        <PostContext label="直接回复对象" post={context.target} onRemove={() => updatePost('target')} onChange={post => updatePost('target', post)} />
-        <PostContext label="被引用帖子" post={context.quoted} onRemove={() => updatePost('quoted')} onChange={post => updatePost('quoted', post)} />
+        <PostContext disabled={replacing} label="直接回复对象" post={context.target} onRemove={() => updatePost('target')} onChange={post => updatePost('target', post)} />
+        <PostContext disabled={replacing} label="被引用帖子" post={context.quoted} onRemove={() => updatePost('quoted')} onChange={post => updatePost('quoted', post)} />
         {context.incompleteReasons.map(reason => <p className="notice" key={reason}>{reason}</p>)}
-        <label className="label">补充语境</label><textarea value={context.supplement} onChange={e => setContext(old => ({ ...old, supplement: e.target.value }))} placeholder="例如：我是认真请教，不是在反驳" />
+        <label className="label">补充语境</label><textarea disabled={replacing} value={context.supplement} onChange={e => setContext(old => ({ ...old, supplement: e.target.value }))} placeholder="例如：我是认真请教，不是在反驳" />
       </div>}
-      <div className="section"><label className="label">英文结果（可直接编辑）</label><div ref={outputElement} className="output" role="textbox" aria-label="英文结果" contentEditable={status === 'ready'} suppressContentEditableWarning onInput={e => setOutput(e.currentTarget.innerText)} /></div>
+      <div className="section"><label className="label">英文结果（可直接编辑）</label><div ref={outputElement} className="output" role="textbox" aria-label="英文结果" contentEditable={status === 'ready' && !replacing} suppressContentEditableWarning onInput={e => { if (!replacement.current) setOutput(e.currentTarget.innerText); }} /></div>
       {status === 'clarification' && <p className="notice">需要澄清：{message}</p>}
       {status === 'error' && <p className="error">{message}</p>}
       {status !== 'clarification' && status !== 'error' && message && <p className="notice">{message}</p>}
-      <div className="row"><button className="primary" disabled={status === 'streaming'} onClick={generate}>{output ? '重新生成' : '翻译'}</button>{status === 'streaming' && <button onClick={cancel}>停止</button>}<button disabled={!output.trim() || status !== 'ready'} onClick={adopt}>采用</button>{adopted && <button disabled={status === 'streaming'} onClick={undo}>撤回</button>}</div>
-      <div className="section"><label className="label">用中文继续修改译文</label><textarea value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：这里想接一下他的玩笑" /><button disabled={!instruction.trim() || status === 'streaming'} onClick={generate}>按要求修改</button></div>
-      <div className="row"><button disabled={!output || status !== 'ready'} onMouseDown={e => e.preventDefault()} onClick={explainSelection}>解释选中表达</button><button disabled={!output || status !== 'ready'} onClick={() => void navigator.clipboard.writeText(output).then(() => setMessage('已复制译文')).catch(() => setMessage('复制失败'))}>复制译文</button></div>
+      <div className="row"><button className="primary" disabled={replacing || status === 'streaming'} onClick={generate}>{output ? '重新生成' : '翻译'}</button>{status === 'streaming' && <button onClick={cancel}>停止</button>}<button disabled={replacing || !output.trim() || status !== 'ready'} onClick={adopt}>采用</button>{adopted && <button disabled={replacing || status === 'streaming'} onClick={undo}>撤回</button>}</div>
+      <div className="section"><label className="label">用中文继续修改译文</label><textarea disabled={replacing} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：这里想接一下他的玩笑" /><button disabled={replacing || !instruction.trim() || status === 'streaming'} onClick={generate}>按要求修改</button></div>
+      <div className="row"><button disabled={replacing || !output || status !== 'ready'} onMouseDown={e => e.preventDefault()} onClick={explainSelection}>解释选中表达</button><button disabled={replacing || !output || status !== 'ready'} onClick={() => void navigator.clipboard.writeText(output).then(() => setMessage('已复制译文')).catch(() => setMessage('复制失败'))}>复制译文</button></div>
     </div>
     {explainInput && <ExplainPanel initial={explainInput.input} sourceKind="translation" sourceUrl={explainInput.sourceUrl} sourceTitle={explainInput.sourceTitle} draftZh={explainInput.draftZh} style={{ top: explainPlacement.point.top, left: explainPlacement.point.left }} onClose={() => setExplainInput(null)} />}
   </>;
