@@ -3,16 +3,17 @@ export interface EditorReplacementOptions { isCurrent?: () => boolean; signal?: 
 
 const normalize = (text: string) => text.replace(/\r\n?/g, '\n').trim();
 const activeReplacements = new WeakSet<HTMLElement>();
+interface DraftLeaf { node: HTMLElement; textLength: number }
 
 // Read Draft's rendered leaves, not layout-dependent innerText blank lines.
-function draftSnapshot(editor: HTMLElement): { text: string; leaves: HTMLElement[] } | null {
+function draftSnapshot(editor: HTMLElement): { text: string; leaves: DraftLeaf[] } | null {
   if (!editor.matches('.public-DraftEditor-content[contenteditable="true"]')) return null;
   const contents = editor.querySelector('[data-contents="true"]');
   if (!contents || contents.parentElement !== editor) return null;
   const blocks = [...contents.children];
   if (!blocks.length) return null;
   const keys = new Set<string>();
-  const leaves: HTMLElement[] = [];
+  const leaves: DraftLeaf[] = [];
   const lines: string[] = [];
   for (const block of blocks) {
     const key = block.getAttribute('data-offset-key')?.match(/^([\w]+)-\d+-\d+$/)?.[1];
@@ -23,20 +24,24 @@ function draftSnapshot(editor: HTMLElement): { text: string; leaves: HTMLElement
     if (!textNodes.length) return null;
     const leafKeys = new Set<string>();
     let text = '';
-    for (const node of textNodes) {
+    let renderedText = '';
+    for (const [index, node] of textNodes.entries()) {
       const leafKey = node.parentElement?.getAttribute('data-offset-key');
       if (!leafKey?.startsWith(`${key}-`) || leafKeys.has(leafKey)) return null;
       leafKeys.add(leafKey);
       if (node.tagName === 'BR') {
         if (textNodes.length !== 1) return null;
-      } else if (node.tagName !== 'SPAN' || node.children.length || /[\r\n]/.test(node.textContent || '')) {
-        // Soft line breaks and unknown markup need manual paste, not guessed offsets.
+      } else if (node.tagName !== 'SPAN' || [...node.childNodes].some(child => child.nodeType !== Node.TEXT_NODE) || /\r/.test(node.textContent || '')) {
         return null;
       }
-      text += node.textContent || '';
-      leaves.push(node);
+      const rendered = node.textContent || '';
+      // Draft appends one display-only LF when the final leaf ends in a soft newline.
+      const logical = index === textNodes.length - 1 && rendered.endsWith('\n\n') ? rendered.slice(0, -1) : rendered;
+      renderedText += rendered;
+      text += logical;
+      leaves.push({ node, textLength: logical.length });
     }
-    if (block.textContent !== text) return null;
+    if (block.textContent !== renderedText) return null;
     lines.push(text);
   }
   if (editor.querySelectorAll('[data-block="true"]').length !== blocks.length) return null;
@@ -49,17 +54,24 @@ export function editorText(editor: HTMLElement): string {
 
 const settle = () => new Promise<void>(resolve => setTimeout(resolve, 20));
 
-function selectDraft(editor: HTMLElement, leaves: HTMLElement[]): Range | null {
+function selectDraft(editor: HTMLElement, leaves: DraftLeaf[]): Range | null {
   const doc = editor.ownerDocument;
   const selection = doc.getSelection();
   if (!selection || !leaves.length) return null;
-  const first = leaves[0]!;
+  const first = leaves[0]!.node;
   const last = leaves.at(-1)!;
   const start = first.firstChild || first.parentElement!;
-  const end = last.lastChild || last.parentElement!;
+  let end: Node = last.node.parentElement!;
+  let endOffset = 0;
+  let remaining = last.textLength;
+  for (const child of last.node.childNodes) {
+    const length = child.textContent?.length || 0;
+    if (remaining <= length) { end = child; endOffset = remaining; break; }
+    remaining -= length;
+  }
   const range = doc.createRange();
   range.setStart(start, 0);
-  range.setEnd(end, end.nodeType === Node.TEXT_NODE ? end.textContent!.length : 0);
+  range.setEnd(end, endOffset);
   selection.removeAllRanges();
   selection.addRange(range);
   doc.dispatchEvent(new Event('selectionchange'));

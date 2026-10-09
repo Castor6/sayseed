@@ -36,6 +36,22 @@ function renderText(editor: HTMLElement, text: string) {
   editor.replaceChildren(contents);
 }
 
+// Each entry is a block's raw rendered leaf text, including any Draft sentinel.
+function renderLeaves(editor: HTMLElement, blocks: string[][]) {
+  renderText(editor, blocks.map(() => 'placeholder').join('\n'));
+  [...editor.querySelectorAll('.public-DraftStyleDefault-block')].forEach((style, blockIndex) => {
+    style.replaceChildren(...blocks[blockIndex]!.map((raw, leafIndex) => {
+      const leaf = document.createElement('span');
+      leaf.dataset.offsetKey = `block${blockIndex}-0-${leafIndex}`;
+      const node = document.createElement('span');
+      node.dataset.text = 'true';
+      node.textContent = raw;
+      leaf.append(node);
+      return leaf;
+    }));
+  });
+}
+
 let editor: HTMLElement;
 let execCommand: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -196,4 +212,104 @@ it('stops verification without retrying or overwriting user input after paste', 
   await vi.advanceTimersByTimeAsync(2000);
   expect(editorText(editor)).toBe('Translation!');
   expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it('accepts internal soft line breaks in one plain-text leaf when replacing the draft', async () => {
+  const draft = '第一段\n第二段\n\n末段';
+  renderLeaves(editor, [[draft]]);
+  const handler = acceptPaste();
+  const result = replaceEditorText(editor, draft, 'Complete translation');
+  await vi.advanceTimersByTimeAsync(140);
+  expect(await result).toBe('applied');
+  expect(handler).toHaveBeenCalledTimes(1);
+  expect(editorText(editor)).toBe('Complete translation');
+});
+
+it('verifies a controlled paste handler that renders soft lines inside one leaf', async () => {
+  const translation = 'First line\nSecond line\n\nLast line';
+  editor.addEventListener('paste', event => {
+    event.preventDefault();
+    renderLeaves(editor, [[(event as ClipboardEvent).clipboardData!.getData('text/plain')]]);
+  });
+  const result = replaceEditorText(editor, '中文原稿', translation);
+  await vi.advanceTimersByTimeAsync(140);
+  expect(await result).toBe('applied');
+  expect(editorText(editor)).toBe(translation);
+  expect(editor.querySelectorAll('[data-block]')).toHaveLength(1);
+});
+
+it.each(['\n', '\n\n'])('preserves trailing %j in a non-final leaf as actual soft breaks', async lineBreaks => {
+  renderLeaves(editor, [[`First${lineBreaks}`, 'Last']]);
+  const expected = `First${lineBreaks}Last`;
+  expect(editorText(editor)).toBe(expected);
+  const handler = acceptPaste();
+  const result = replaceEditorText(editor, expected, 'Translation');
+  await vi.advanceTimersByTimeAsync(140);
+  expect(await result).toBe('applied');
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it.each([1, 3])('excludes exactly one sentinel from the UTF-16 selection after %i trailing soft breaks', async breakCount => {
+  const text = `结尾😀${'\n'.repeat(breakCount)}`;
+  renderLeaves(editor, [[`${text}\n`]]);
+  const leafText = editor.querySelector('[data-text]')!.firstChild;
+  const handler = acceptPaste();
+  const result = replaceEditorText(editor, text, 'Translation');
+  await vi.advanceTimersByTimeAsync(20);
+  const range = document.getSelection()!.getRangeAt(0);
+  expect(range.startContainer).toBe(leafText);
+  expect(range.startOffset).toBe(0);
+  expect(range.endContainer).toBe(leafText);
+  expect(range.endOffset).toBe(text.length);
+  expect(range.toString()).toBe(text);
+  await vi.advanceTimersByTimeAsync(120);
+  expect(await result).toBe('applied');
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it('removes the rendered sentinel from intermediate blocks without adding an extra blank line', async () => {
+  renderLeaves(editor, [['First\n\n'], ['Middle\n\n\n'], ['Last']]);
+  const expected = 'First\n\nMiddle\n\n\nLast';
+  expect(editorText(editor)).toBe(expected);
+  const handler = acceptPaste();
+  const result = replaceEditorText(editor, expected, 'Translation');
+  await vi.advanceTimersByTimeAsync(140);
+  expect(await result).toBe('applied');
+  expect(handler).toHaveBeenCalledTimes(1);
+});
+
+it('locates the logical selection endpoint across split text nodes before the sentinel', async () => {
+  const text = '中文🌱\n';
+  renderLeaves(editor, [[`${text}\n`]]);
+  const node = editor.querySelector('[data-text]')!;
+  const parts = ['中文', '🌱', '\n\n'].map(part => document.createTextNode(part));
+  node.replaceChildren(...parts);
+  acceptPaste();
+  const result = replaceEditorText(editor, text, 'Translation');
+  await vi.advanceTimersByTimeAsync(20);
+  const range = document.getSelection()!.getRangeAt(0);
+  expect(range.endContainer).toBe(parts[2]);
+  expect(range.endOffset).toBe(1);
+  expect(range.toString()).toBe(text);
+  await vi.advanceTimersByTimeAsync(120);
+  expect(await result).toBe('applied');
+});
+
+it.each(['nested element', 'duplicate block key', 'carriage return'])('still rejects %s after allowing soft lines', async corruption => {
+  if (corruption === 'nested element') {
+    const node = editor.querySelector('[data-text]')!;
+    const nested = document.createElement('span');
+    nested.textContent = node.textContent;
+    node.replaceChildren(nested);
+  } else if (corruption === 'duplicate block key') {
+    const block = editor.querySelector('[data-block]')!;
+    block.parentElement!.append(block.cloneNode(true));
+  } else {
+    renderLeaves(editor, [['First\rLast']]);
+  }
+  const before = editor.innerHTML;
+  const handler = acceptPaste();
+  expect(await replaceEditorText(editor, editorText(editor), 'Translation')).toBe('unsupported');
+  expect(editor.innerHTML).toBe(before);
+  expect(handler).not.toHaveBeenCalled();
 });
